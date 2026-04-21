@@ -81,6 +81,7 @@ Required checks:
 5. `CodexExecBackend` spawns `codex exec --json` or `codex exec resume --json`.
 6. Stdout is parsed only as JSONL. Stderr is never parsed as JSONL; it is captured for redacted logs and error output.
 7. `StreamBuffer` aggregates formatted progress and sends chunked WeChat messages through `WeChatSender`.
+8. `extraWritableRoots` are passed to Codex as `--add-dir` in `workspace` mode so explicitly configured sibling directories can be written without enabling `yolo`.
 
 ## Backend Boundary
 
@@ -133,7 +134,7 @@ Continuous WeChat messages can arrive concurrently. Runtime state uses a per-use
 Local data lives under `~/.wechat-codex-bridge` unless `WECHAT_CODEX_BRIDGE_HOME` is set.
 
 - `accounts/*.json`: bot token, account id, bound user id.
-- `config.json`: default cwd, allowlist repo roots, stream interval, optional explicit Git-check exceptions.
+- `config.json`: default cwd, allowlist repo roots, extra writable roots, stream interval, optional explicit Git-check exceptions.
 - `sessions/*.json`: one bound user's Codex session id, cwd, mode, model, history, active state.
 - `sync-buffer.txt`: WeChat long-poll cursor.
 - `logs/*.log`: redacted daemon logs.

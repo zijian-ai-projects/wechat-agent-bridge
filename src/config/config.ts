@@ -6,6 +6,7 @@ import { loadSecureJson, saveSecureJson } from "./secureStore.js";
 export interface BridgeConfig {
   defaultCwd: string;
   allowlistRoots: string[];
+  extraWritableRoots: string[];
   streamIntervalMs: number;
 }
 
@@ -15,7 +16,8 @@ export function loadConfig(): BridgeConfig {
   return {
     defaultCwd: config.defaultCwd ?? cwd,
     allowlistRoots: config.allowlistRoots?.length ? config.allowlistRoots : [config.defaultCwd ?? cwd],
-    streamIntervalMs: config.streamIntervalMs ?? 30_000,
+    extraWritableRoots: config.extraWritableRoots ?? [],
+    streamIntervalMs: config.streamIntervalMs ?? 10_000,
   };
 }
 

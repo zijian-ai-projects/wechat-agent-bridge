@@ -11,7 +11,7 @@ export class StreamBuffer {
   private readonly chunkSize: number;
   private readonly send: (text: string) => Promise<void>;
   private buffer = "";
-  private lastFlush = Date.now();
+  private lastFlush = 0;
 
   constructor(options: StreamBufferOptions) {
     this.intervalMs = options.intervalMs ?? 30_000;

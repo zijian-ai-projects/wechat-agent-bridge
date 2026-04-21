@@ -10,6 +10,7 @@ export interface BuildCodexArgsInput {
   mode: AgentMode;
   model?: string;
   codexSessionId?: string;
+  extraWritableRoots?: string[];
 }
 
 function modeFlags(mode: AgentMode): string[] {
@@ -25,11 +26,15 @@ function modeFlags(mode: AgentMode): string[] {
 
 export function buildCodexExecArgs(input: BuildCodexArgsInput): string[] {
   const model = input.model ? ["--model", input.model] : [];
+  const addDirFlags = input.mode === "workspace"
+    ? (input.extraWritableRoots ?? [])
+      .filter((root) => root !== input.cwd)
+      .flatMap((root) => ["--add-dir", root])
+    : [];
+  const topLevelFlags = [...modeFlags(input.mode), "--cd", input.cwd, ...addDirFlags];
   if (input.codexSessionId) {
     return [
-      ...modeFlags(input.mode),
-      "--cd",
-      input.cwd,
+      ...topLevelFlags,
       "exec",
       "resume",
       "--json",
@@ -39,7 +44,7 @@ export function buildCodexExecArgs(input: BuildCodexArgsInput): string[] {
     ];
   }
 
-  return ["exec", "--json", ...modeFlags(input.mode), "--cd", input.cwd, ...model, input.prompt];
+  return [...topLevelFlags, "exec", "--json", ...model, input.prompt];
 }
 
 export function formatCodexEventForWechat(raw: unknown): string | undefined {
@@ -60,10 +65,16 @@ export function formatCodexEventForWechat(raw: unknown): string | undefined {
     case "item.completed":
       return formatItem(event.item, "完成") ?? extractText(event);
     case "error":
+      if (isTransientCodexError(event.error ?? event.message)) return undefined;
       return `Codex 错误: ${errorMessage(event.error ?? event.message)}`;
     default:
       return extractText(event);
   }
+}
+
+function isTransientCodexError(error: unknown): boolean {
+  const message = errorMessage(error);
+  return /^Reconnecting\.\.\./i.test(message) || /timeout waiting for child process to exit/i.test(message);
 }
 
 export interface InterruptibleChildProcess {

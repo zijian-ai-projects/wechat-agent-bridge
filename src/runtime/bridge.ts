@@ -36,6 +36,7 @@ export async function runBridge(backend: AgentBackend = new CodexExecBackend()):
   }
   const defaultCwd = await realpath(config.defaultCwd);
   const allowlistRoots = await Promise.all(config.allowlistRoots.map((root) => realpath(root)));
+  const extraWritableRoots = await Promise.all(config.extraWritableRoots.map((root) => realpath(root)));
   const sessionStore = new FileSessionStore();
   const session = await sessionStore.load(account.boundUserId, {
     cwd: defaultCwd,
@@ -47,7 +48,8 @@ export async function runBridge(backend: AgentBackend = new CodexExecBackend()):
   const api = new WeChatApi(account.botToken, account.baseUrl);
   const sender = createWechatSender(api, account.accountId);
   const monitor = new WeChatMonitor(api, {
-    onMessage: (message) => handleMessage(message, account, session, sessionStore, sender, backend, config.streamIntervalMs),
+    onMessage: (message) =>
+      handleMessage(message, account, session, sessionStore, sender, backend, config.streamIntervalMs, extraWritableRoots),
     onSessionExpired: () => {
       logger.warn("WeChat session expired");
       console.error("微信登录已过期，请重新运行 npm run setup");
@@ -75,6 +77,7 @@ async function handleMessage(
   sender: WeChatSender,
   backend: AgentBackend,
   streamIntervalMs: number,
+  extraWritableRoots: string[] = [],
 ): Promise<void> {
   if (
     !isDirectBoundUserMessage({
@@ -130,7 +133,7 @@ async function handleMessage(
     return;
   }
 
-  await runCodexTurn(text, fromUserId, contextToken, session, sessionStore, sender, backend, streamIntervalMs);
+  await runCodexTurn(text, fromUserId, contextToken, session, sessionStore, sender, backend, streamIntervalMs, extraWritableRoots);
 }
 
 export const handleMessageForTest = handleMessage;
@@ -144,6 +147,7 @@ async function runCodexTurn(
   sender: WeChatSender,
   backend: AgentBackend,
   streamIntervalMs: number,
+  extraWritableRoots: string[],
 ): Promise<void> {
   const turnId = randomUUID();
   session.state = "processing";
@@ -163,6 +167,7 @@ async function runCodexTurn(
     mode: session.mode,
     model: session.model,
     codexSessionId: session.codexSessionId,
+    extraWritableRoots,
   };
 
   try {

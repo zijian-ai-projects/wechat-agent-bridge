@@ -42,7 +42,12 @@ export async function runSetup(): Promise<void> {
       roots.map(async (root) => assertGitRepo(await realpath(root))),
     );
     await resolveAllowedRepoRoot(defaultCwd, allowlistRoots);
-    saveConfig({ defaultCwd, allowlistRoots, streamIntervalMs: current.streamIntervalMs });
+    saveConfig({
+      defaultCwd,
+      allowlistRoots,
+      extraWritableRoots: current.extraWritableRoots,
+      streamIntervalMs: current.streamIntervalMs,
+    });
     console.log("配置已保存。运行 npm run start 前台启动，或 npm run daemon -- start 后台启动。");
   } finally {
     rl.close();

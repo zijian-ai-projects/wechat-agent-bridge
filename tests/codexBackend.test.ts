@@ -9,17 +9,31 @@ import { parseJsonLine } from "../src/backend/codexEvents.js";
 test("buildCodexExecArgs maps modes to Codex sandbox flags", () => {
   assert.deepEqual(
     buildCodexExecArgs({ prompt: "hi", cwd: "/tmp/project", mode: "readonly" }),
-    ["exec", "--json", "--sandbox", "read-only", "--ask-for-approval", "never", "--cd", "/tmp/project", "hi"],
+    ["--sandbox", "read-only", "--ask-for-approval", "never", "--cd", "/tmp/project", "exec", "--json", "hi"],
   );
 
   assert.deepEqual(
-    buildCodexExecArgs({ prompt: "hi", cwd: "/tmp/project", mode: "workspace", model: "gpt-5.4" }),
-    ["exec", "--json", "--sandbox", "workspace-write", "--ask-for-approval", "never", "--cd", "/tmp/project", "--model", "gpt-5.4", "hi"],
+    buildCodexExecArgs({ prompt: "hi", cwd: "/tmp/project", mode: "workspace", model: "gpt-5.4", extraWritableRoots: ["/tmp/SageTalk"] }),
+    [
+      "--sandbox",
+      "workspace-write",
+      "--ask-for-approval",
+      "never",
+      "--cd",
+      "/tmp/project",
+      "--add-dir",
+      "/tmp/SageTalk",
+      "exec",
+      "--json",
+      "--model",
+      "gpt-5.4",
+      "hi",
+    ],
   );
 
   assert.deepEqual(
     buildCodexExecArgs({ prompt: "hi", cwd: "/tmp/project", mode: "yolo" }),
-    ["exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--cd", "/tmp/project", "hi"],
+    ["--dangerously-bypass-approvals-and-sandbox", "--cd", "/tmp/project", "exec", "--json", "hi"],
   );
 });
 
@@ -48,6 +62,13 @@ test("formatCodexEventForWechat summarizes key JSONL events", () => {
 test("unknown JSONL events are ignored without throwing", () => {
   assert.doesNotThrow(() => formatCodexEventForWechat({ type: "future.event", payload: { ok: true } }));
   assert.equal(formatCodexEventForWechat({ type: "future.event", payload: { ok: true } }), undefined);
+});
+
+test("transient reconnect errors are not sent to WeChat as Codex failures", () => {
+  assert.equal(
+    formatCodexEventForWechat({ type: "error", message: "Reconnecting... 5/5 (timeout waiting for child process to exit)" }),
+    undefined,
+  );
 });
 
 test("stdout JSONL parser does not parse stderr log text", () => {

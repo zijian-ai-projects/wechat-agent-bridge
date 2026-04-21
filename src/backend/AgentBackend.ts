@@ -7,6 +7,7 @@ export interface AgentTurnRequest {
   mode: AgentMode;
   model?: string;
   codexSessionId?: string;
+  extraWritableRoots?: string[];
 }
 
 export interface AgentTurnResult {

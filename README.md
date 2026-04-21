@@ -79,6 +79,37 @@ npm run daemon -- stop
 
 默认不传 `--skip-git-repo-check`。只有未来显式配置并确认某个 allowlist 目录允许跳过时，才会考虑该能力；v1 默认不启用。
 
+## 允许写入兄弟目录
+
+`workspace` 模式下，Codex 默认只能写当前 `cwd`。如果你要让它创建或修改兄弟目录，例如：
+
+```text
+/Users/lixinyao/.codex/projects/SageTalk
+```
+
+需要在 `~/.wechat-codex-bridge/config.json` 里显式配置 `extraWritableRoots`。如果目标目录还不存在，要把它的父目录加入额外可写根：
+
+```json
+{
+  "defaultCwd": "/Users/lixinyao/.codex/projects/wechat-codex-bridge",
+  "allowlistRoots": [
+    "/Users/lixinyao/.codex/projects/wechat-codex-bridge"
+  ],
+  "extraWritableRoots": [
+    "/Users/lixinyao/.codex/projects"
+  ],
+  "streamIntervalMs": 10000
+}
+```
+
+然后重启 daemon：
+
+```bash
+npm run daemon -- restart
+```
+
+`extraWritableRoots` 会被转换为 `codex --add-dir <path>`，只在 `workspace` 模式下用于 sandbox 额外写入范围。
+
 ## Codex 模式
 
 - `readonly` 默认：`--sandbox read-only --ask-for-approval never`
