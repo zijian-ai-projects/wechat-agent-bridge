@@ -1,6 +1,6 @@
-# wechat-codex-bridge
+# wechat-agent-bridge
 
-个人微信 `<->` 本机 Codex CLI daemon 桥接器。v1 是单用户产品：只服务一个绑定微信号和当前系统用户的本机 Codex 登录态。
+个人微信 `<->` 本机 coding agent daemon 桥接器。v1 默认使用 Codex 后端，只服务一个绑定微信号和当前系统用户的本机 Codex 登录态。
 
 ## V1 边界
 
@@ -8,6 +8,18 @@
 - 默认忽略群聊、陌生人、非绑定用户、bot 消息。
 - 不做多用户共享、团队协作、公共 bot 或 system 级共享服务。
 - daemon 默认以当前登录用户身份运行，以复用该用户已有的 Codex CLI 登录缓存。
+
+## 当前分层
+
+项目仍是单仓库单 package，但运行逻辑已拆成 core + adapters：
+
+- `src/core`: 平台无关服务层，负责 bridge 编排、session、mode/cwd/model 状态、agent turn lifecycle 和 WeChat 状态视图。
+- `src/backend`: agent 后端适配层。当前真正可运行的是 `CodexExecBackend`；`ClaudeCodeBackend` 和 `CursorAgentBackend` 只是后续扩展点。
+- `src/runtime`: v1 微信 daemon 装配层，负责 preflight、账号/session 加载、WeChat monitor 和 signal shutdown。
+- `src/mcp`: stdio MCP server，把 core 能力暴露成统一工具。
+- `integrations`: Codex plugin/skill/MCP 包装基础，以及 Claude/Cursor 的模板和映射说明。
+
+这样做是为了先保持 v1 稳定可运行，再通过 MCP 和薄包装层逐步兼容 Codex / Claude / Cursor；不会为了“看起来三平台统一”而写不可验证的伪 backend。
 
 ## 运行前提
 
@@ -54,6 +66,12 @@ npm run setup
 npm run start
 ```
 
+启动 MCP server：
+
+```bash
+npm run mcp
+```
+
 后台运行：
 
 ```bash
@@ -65,6 +83,47 @@ npm run daemon -- stop
 ```
 
 后台 daemon 也是用户级进程，默认复用当前用户的 Codex 登录态。不要把 v1 当成 system 级共享服务运行。
+
+## MCP Server
+
+本地 MCP server 使用 stdio，工具返回稳定 JSON：
+
+```json
+{ "ok": true, "data": {} }
+```
+
+或：
+
+```json
+{ "ok": false, "error": { "code": "INVALID_ARGUMENT", "message": "..." } }
+```
+
+工具：
+
+- `wechat_status`
+- `wechat_bind_status`
+- `wechat_history`
+- `session_clear`
+- `agent_resume`
+- `agent_interrupt`
+- `agent_set_mode`
+- `agent_set_cwd`
+
+推荐给外部 MCP client 使用绝对路径：
+
+```bash
+npm --prefix /ABSOLUTE/PATH/TO/wechat-agent-bridge run mcp
+```
+
+Codex CLI 注册示例：
+
+```bash
+codex mcp add wechat-agent-bridge -- npm --prefix /ABSOLUTE/PATH/TO/wechat-agent-bridge run mcp
+```
+
+详见 `docs/mcp.md`。
+
+默认本地数据目录现在是 `~/.wechat-agent-bridge`。也可以用 `WECHAT_AGENT_BRIDGE_HOME` 指定目录；旧的 `WECHAT_CODEX_BRIDGE_HOME` 仍作为兼容 fallback 被接受。
 
 ## Setup / Start 自检
 
@@ -87,13 +146,13 @@ npm run daemon -- stop
 /Users/lixinyao/.codex/projects/SageTalk
 ```
 
-需要在 `~/.wechat-codex-bridge/config.json` 里显式配置 `extraWritableRoots`。如果目标目录还不存在，要把它的父目录加入额外可写根：
+需要在 `~/.wechat-agent-bridge/config.json` 里显式配置 `extraWritableRoots`。如果目标目录还不存在，要把它的父目录加入额外可写根：
 
 ```json
 {
-  "defaultCwd": "/Users/lixinyao/.codex/projects/wechat-codex-bridge",
+  "defaultCwd": "/Users/lixinyao/.codex/projects/wechat-agent-bridge",
   "allowlistRoots": [
-    "/Users/lixinyao/.codex/projects/wechat-codex-bridge"
+    "/Users/lixinyao/.codex/projects/wechat-agent-bridge"
   ],
   "extraWritableRoots": [
     "/Users/lixinyao/.codex/projects"
@@ -129,6 +188,18 @@ npm run daemon -- restart
 - `/history [n]`
 
 `/clear` 会丢弃旧 Codex session/thread id，下次普通消息开启全新会话。非 `/clear` 的继续对话优先使用 `codex exec resume <SESSION_ID>`。
+
+## Platform Integrations
+
+`integrations/codex` 当前最完整，包含：
+
+- `plugin/.codex-plugin/plugin.json`
+- `plugin/.mcp.json`
+- `plugin/skills/wechat-agent-bridge/SKILL.md`
+
+已核对当前本机 Codex CLI 支持 `codex mcp add` 和 `codex plugin marketplace add`，但没有 `codex plugin create/install/list`，所以文档不写不存在的安装命令。
+
+`integrations/claude` 和 `integrations/cursor` 当前只放 MCP 配置模板、skill/rules 草案和工具映射说明。后续接入方式是复用同一个 MCP server，而不是绕过 core 直接调用内部文件。
 
 ## 认证排查
 

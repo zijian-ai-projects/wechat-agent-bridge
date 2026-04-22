@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "wechat-agent-bridge": {
+      "type": "stdio",
+      "command": "npm",
+      "args": ["--prefix", "/ABSOLUTE/PATH/TO/wechat-agent-bridge", "run", "mcp"],
+      "env": {}
+    }
+  }
+}

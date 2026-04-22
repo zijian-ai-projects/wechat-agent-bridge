@@ -1,6 +1,43 @@
 # Architecture
 
-`wechat-codex-bridge` is a personal bridge between one bound WeChat account and the local Codex CLI daemon running as the same OS user. It is not a multi-tenant service, not a shared team bot, and not a public bot.
+`wechat-agent-bridge` is a personal bridge between one bound WeChat account and local coding agent backends running as the same OS user. V1 uses Codex CLI as the only runnable backend. It is not a multi-tenant service, not a shared team bot, and not a public bot.
+
+## Current Layering
+
+The repository is still a single package. The v1 runtime has been split into core services plus adapters:
+
+```text
+src/
+  main.ts
+  mcp-main.ts
+  core/
+    AgentService.ts
+    BridgeService.ts
+    ModeService.ts
+    SessionService.ts
+    WechatService.ts
+    errors.ts
+    types.ts
+  backend/
+    AgentBackend.ts
+    CodexExecBackend.ts
+    ClaudeCodeBackend.ts
+    CursorAgentBackend.ts
+    capabilities.ts
+    formatters.ts
+  mcp/
+    context.ts
+    server.ts
+    tools/
+  runtime/
+    bridge.ts
+```
+
+- `src/core` owns platform-neutral orchestration: message handling, session state, mode/cwd/model changes, and agent turn lifecycle.
+- `src/backend` owns agent backend adapters. `CodexExecBackend` is the only runnable backend in v1; Claude and Cursor files are typed extension points.
+- `src/runtime` wires the WeChat daemon to the core services.
+- `src/mcp` wires the same core services to stdio MCP tools.
+- `integrations/` contains thin platform wrappers and templates.
 
 ## Reference Architecture Breakdown
 
@@ -77,7 +114,7 @@ Required checks:
 1. `setup` checks Codex login, obtains a WeChat QR login, saves bot token/account/bound user id, and writes default repo root plus allowlist roots.
 2. `start` checks Codex login again, validates cwd/allowlist/Git repo state, loads account/session, resets stale `processing` state to `idle`, and starts `WeChatMonitor`.
 3. `WeChatMonitor` long polls with the saved sync buffer and dispatches messages without blocking the polling loop.
-4. `runtime/bridge.ts` filters messages to the bound private user, routes slash commands, or sends ordinary text to `AgentBackend`.
+4. `BridgeService` filters messages to the bound private user, routes slash commands, or sends ordinary text through `AgentService`.
 5. `CodexExecBackend` spawns `codex exec --json` or `codex exec resume --json`.
 6. Stdout is parsed only as JSONL. Stderr is never parsed as JSONL; it is captured for redacted logs and error output.
 7. `StreamBuffer` aggregates formatted progress and sends chunked WeChat messages through `WeChatSender`.
@@ -93,6 +130,23 @@ Required checks:
 - `formatEventForWechat(...)`
 
 The v1 implementation is `CodexExecBackend`. `CodexAppServerBackend` is intentionally a stub so v2 can replace process-level turns with app-server turn control without changing WeChat/session/command layers.
+
+Backend capability metadata lives in `backend/capabilities.ts`. It marks Codex as available and Claude/Cursor as unavailable extension points. That keeps multi-platform support honest: the core and MCP contracts are ready, but v1 does not pretend to execute Claude or Cursor turns.
+
+## MCP Boundary
+
+`src/mcp` exposes the core services as stable local MCP tools:
+
+- `wechat_status`
+- `wechat_bind_status`
+- `wechat_history`
+- `session_clear`
+- `agent_resume`
+- `agent_interrupt`
+- `agent_set_mode`
+- `agent_set_cwd`
+
+Tool responses use `{ ok, data }` or `{ ok, error: { code, message } }`. Tool handlers call `SessionService`, `ModeService`, `AgentService`, and `WechatService`; they do not duplicate WeChat command logic or bypass cwd/mode/session constraints.
 
 ## Codex Event Handling
 
@@ -131,7 +185,7 @@ Continuous WeChat messages can arrive concurrently. Runtime state uses a per-use
 
 ## Persistence
 
-Local data lives under `~/.wechat-codex-bridge` unless `WECHAT_CODEX_BRIDGE_HOME` is set.
+Local data lives under `~/.wechat-agent-bridge` unless `WECHAT_AGENT_BRIDGE_HOME` is set. The legacy `WECHAT_CODEX_BRIDGE_HOME` environment variable is still accepted as a fallback during the rename transition.
 
 - `accounts/*.json`: bot token, account id, bound user id.
 - `config.json`: default cwd, allowlist repo roots, extra writable roots, stream interval, optional explicit Git-check exceptions.

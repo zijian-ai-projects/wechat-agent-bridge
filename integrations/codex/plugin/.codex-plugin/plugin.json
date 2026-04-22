@@ -1,0 +1,23 @@
+{
+  "name": "wechat-agent-bridge",
+  "version": "0.1.0",
+  "description": "Control a local Codex CLI daemon from a bound personal WeChat account through MCP tools.",
+  "license": "MIT",
+  "keywords": ["wechat", "codex", "mcp", "local-agent"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "WeChat Agent Bridge",
+    "shortDescription": "Expose local WeChat bridge controls to Codex through MCP.",
+    "longDescription": "Provides MCP tools for checking WeChat binding, reading bridge history, clearing sessions, interrupting or resuming the local Codex agent, and changing cwd or sandbox mode.",
+    "developerName": "wechat-agent-bridge",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Local MCP", "Agent Control"],
+    "defaultPrompt": [
+      "Check my WeChat bridge status.",
+      "Show recent bridge history.",
+      "Set the bridge mode to workspace."
+    ],
+    "brandColor": "#0F766E"
+  }
+}

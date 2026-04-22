@@ -1,10 +1,11 @@
 {
-  "name": "wechat-codex-bridge",
+  "name": "wechat-agent-bridge",
   "version": "0.1.0",
-  "description": "A WeChat bridge daemon for controlling the local Codex CLI.",
+  "description": "A WeChat bridge daemon for controlling local coding agents through core services and MCP.",
   "type": "module",
   "bin": {
-    "wechat-codex-bridge": "./dist/main.js"
+    "wechat-agent-bridge": "./dist/src/main.js",
+    "wechat-agent-bridge-mcp": "./dist/src/mcp-main.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -12,14 +13,17 @@
     "test": "tsx --test tests/**/*.test.ts",
     "setup": "tsx src/main.ts setup",
     "start": "tsx src/main.ts start",
-    "daemon": "tsx src/main.ts daemon"
+    "daemon": "tsx src/main.ts daemon",
+    "mcp": "tsx src/mcp-main.ts"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "qrcode": "^1.5.4",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-terminal": "^0.12.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^20.17.17",

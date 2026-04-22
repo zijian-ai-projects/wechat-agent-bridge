@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,17 @@ test("logger writes redacted log lines and rotates old bridge logs", async () =>
   assert.match(log, /token check/);
   assert.doesNotMatch(log, /secret-token/);
   assert.doesNotMatch(log, /secret-auth/);
+
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("logger does not throw when log path cannot be written", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wcb-logs-unwritable-"));
+  const notADirectory = join(dir, "bridge.log");
+  writeFileSync(notADirectory, "not a directory");
+  const logger = createLogger({ logDir: notADirectory });
+
+  assert.doesNotThrow(() => logger.error("fatal path", { token: "secret-token" }));
 
   await rm(dir, { recursive: true, force: true });
 });

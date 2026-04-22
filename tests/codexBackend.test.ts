@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { EventEmitter } from "node:events";
 
+import { getBackendCapabilities } from "../src/backend/capabilities.js";
 import { buildCodexExecArgs, formatCodexEventForWechat, interruptChildProcess } from "../src/backend/CodexExecBackend.js";
 import { parseJsonLine } from "../src/backend/codexEvents.js";
 
@@ -88,4 +89,11 @@ test("interruptChildProcess sends SIGINT before hard kill", async () => {
   await interruptChildProcess(child, 50);
 
   assert.deepEqual(signals, ["SIGINT"]);
+});
+
+test("backend capabilities mark Codex as the only runnable v1 backend", () => {
+  assert.equal(getBackendCapabilities("codex").available, true);
+  assert.equal(getBackendCapabilities("codex").supportsResume, true);
+  assert.equal(getBackendCapabilities("claude").available, false);
+  assert.equal(getBackendCapabilities("cursor").available, false);
 });

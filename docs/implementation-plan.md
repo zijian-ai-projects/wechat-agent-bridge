@@ -1,96 +1,79 @@
-# Authentication And Safety Hardening Implementation Plan
+# Core + MCP + Thin Adapters Implementation Plan
 
 ## Goal
 
-Merge the new v1 boundary, authentication, cwd/Git, JSONL, interrupt and documentation constraints into the existing MVP.
+Keep the existing v1 WeChat-to-agent daemon runnable with Codex as the default backend while evolving the repository into core services, backend adapters, a local MCP surface, and platform integration templates.
 
-## V1 Must Do
+## Module Mapping
 
-- Enforce personal-only product boundary in docs and tests.
-- Keep `msg.from_user_id === boundUserId` as a hard filter and test condition.
-- Add Codex CLI authentication self-checks using `codex login status`.
-- Prefer current terminal user's ChatGPT Codex login cache; API key is only an optional Codex CLI fallback.
-- Validate default cwd and `/cwd` targets as normalized real paths inside allowlisted Git repo roots.
-- Avoid `--skip-git-repo-check` by default.
-- Parse only stdout JSONL from `codex exec --json`; treat stderr as logs/errors only.
-- Support known Codex event summaries and ignore unknown event types safely.
-- Interrupt old turns with `SIGINT`, then `SIGKILL` after timeout, before starting the new ordinary message.
-- Protect against late old-turn events with active turn tokens.
-- Update README with prerequisites, login priority, daemon credential assumptions, and auth troubleshooting.
+| Current module | Target module | Action |
+|---|---|---|
+| `runtime/bridge.ts` | `core/BridgeService.ts` | Move message filtering, command routing, interrupt-before-new-message, and turn state handling into core. |
+| `runtime/bridge.ts` | `runtime/bridge.ts` | Keep daemon assembly, preflight, account/session loading, WeChat monitor setup, and shutdown. |
+| `session/sessionStore.ts` | `core/SessionService.ts` | Wrap persistence with status/history/clear methods shared by daemon and MCP. |
+| `commands/*` | `core/ModeService.ts` | Keep slash commands, but expose mode/cwd/model state changes for MCP. |
+| `backend/AgentBackend.ts` | `backend/capabilities.ts` | Add backend capability metadata. Codex is runnable; Claude/Cursor are placeholders. |
+| none | `mcp/server.ts`, `mcp/tools/*` | Expose core service operations as stdio MCP tools. |
+| none | `integrations/*` | Add Codex plugin scaffold and Claude/Cursor templates. |
 
-## V2 Only
+## Phase A: Extract Core Without Behavior Change
 
-- `codex app-server` deep integration.
-- WeChat-side approval workflows.
-- Fine-grained turn pause/resume beyond process cancellation.
-- Multi-user, team collaboration, shared public bot, tenant isolation.
+- Add core tests for message filtering, interrupt semantics, `/clear`, resume fallback, cwd allowlist, and session status/history.
+- Implement `AgentService`, `BridgeService`, `SessionService`, `ModeService`, `WechatService`, and shared error/types files.
+- Keep `handleMessageForTest` as a compatibility wrapper.
+- Verify with `npm test` and `npm run typecheck`.
 
-## File Tree After This Update
+## Phase B: Add MCP
 
-```text
-src/
-  backend/
-    AgentBackend.ts
-    CodexExecBackend.ts
-    CodexAppServerBackend.ts
-    codexEvents.ts
-  commands/
-    handlers.ts
-    router.ts
-  config/
-    accounts.ts
-    codexAuth.ts
-    config.ts
-    git.ts
-    paths.ts
-    secureStore.ts
-    security.ts
-  daemon/
-    manager.ts
-  logging/
-    logger.ts
-    redact.ts
-  runtime/
-    bridge.ts
-    chunking.ts
-    codexAvailability.ts
-    preflight.ts
-    streamBuffer.ts
-  session/
-    sessionStore.ts
-    types.ts
-  setup/
-    setup.ts
-  wechat/
-    api.ts
-    login.ts
-    message.ts
-    monitor.ts
-    sender.ts
-    syncBuffer.ts
-    types.ts
-tests/
-  auth.test.ts
-  bridge.test.ts
-  chunking.test.ts
-  codexBackend.test.ts
-  commands.test.ts
-  cwdGit.test.ts
-  logger.test.ts
-  security.test.ts
-  sessionStore.test.ts
+- Install official MCP TypeScript SDK.
+- Implement `src/mcp/server.ts` with stdio transport.
+- Add `src/mcp-main.ts`.
+- Add `npm run mcp`.
+- Expose:
+  - `wechat_status`
+  - `wechat_bind_status`
+  - `wechat_history`
+  - `session_clear`
+  - `agent_resume`
+  - `agent_interrupt`
+  - `agent_set_mode`
+  - `agent_set_cwd`
+- Verify with MCP tool tests, typecheck, and build.
+
+## Phase C: Codex Integration
+
+- Verify local Codex CLI command surface before writing install instructions.
+- Add `integrations/codex/plugin/.codex-plugin/plugin.json`.
+- Add `integrations/codex/plugin/.mcp.json` as a local template.
+- Add Codex skill instructions mapping MCP tools to bridge actions.
+- Document `codex mcp add wechat-agent-bridge -- npm --prefix ... run mcp`.
+
+## Phase D: Claude/Cursor Templates
+
+- Add MCP config templates and mapping docs.
+- Do not implement runnable Claude/Cursor backends in this phase.
+- Keep `ClaudeCodeBackend` and `CursorAgentBackend` as typed extension points only.
+
+## Verification Gates
+
+After each phase:
+
+```bash
+npm test
+npm run typecheck
 ```
 
-## Task Plan
+Before final handoff:
 
-1. Add tests for Codex login status parsing, not-logged-in guidance, and sensitive auth redaction.
-2. Add tests for cwd/Git validation and `/cwd` failure messages.
-3. Add tests for JSONL stdout/stderr separation, unknown event handling, `/clear` session reset, and SIGINT-first interrupt behavior.
-4. Implement `config/codexAuth.ts`, `config/git.ts`, and `runtime/preflight.ts`.
-5. Wire preflight into `setup` and `start`.
-6. Extend session/config types with allowlisted repo roots and optional explicit skip-Git exceptions.
-7. Update command routing to validate `/cwd` as an allowlisted repo root.
-8. Update `CodexExecBackend` interrupt and event handling.
-9. Update runtime bridge with active turn tokens to discard late old-turn output.
-10. Update README and v2 docs.
-11. Run `npm test`, `npm run typecheck`, and `npm run build`.
+```bash
+npm test
+npm run typecheck
+npm run build
+```
+
+## Follow-Up Roadmap
+
+- Add real MCP client smoke tests using framed stdio requests.
+- Add a validated Codex marketplace root once distribution is decided.
+- Promote Claude/Cursor templates to installable packages only after confirming their current package formats.
+- Implement `ClaudeCodeBackend` or `CursorAgentBackend` only after their execution/resume/interrupt semantics are documented and covered by tests.

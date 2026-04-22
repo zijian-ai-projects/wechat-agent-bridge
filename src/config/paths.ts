@@ -1,10 +1,10 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const APP_NAME = "wechat-codex-bridge";
+export const APP_NAME = "wechat-agent-bridge";
 
 export function getDataDir(): string {
-  return process.env.WECHAT_CODEX_BRIDGE_HOME || join(homedir(), ".wechat-codex-bridge");
+  return process.env.WECHAT_AGENT_BRIDGE_HOME || process.env.WECHAT_CODEX_BRIDGE_HOME || join(homedir(), ".wechat-agent-bridge");
 }
 
 export function getAccountsDir(): string {

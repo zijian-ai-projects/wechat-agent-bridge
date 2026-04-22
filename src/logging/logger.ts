@@ -39,11 +39,15 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   const maxLogFiles = options.maxLogFiles ?? 14;
 
   function write(level: string, message: string, data?: unknown): void {
-    mkdirSync(logDir, { recursive: true });
-    cleanupOldLogs(logDir, maxLogFiles);
-    const parts = [new Date().toISOString(), level, message];
-    if (data !== undefined) parts.push(redactSecrets(data));
-    appendFileSync(join(logDir, logFileName()), `${parts.join(" ")}\n`, "utf8");
+    try {
+      mkdirSync(logDir, { recursive: true });
+      cleanupOldLogs(logDir, maxLogFiles);
+      const parts = [new Date().toISOString(), level, message];
+      if (data !== undefined) parts.push(redactSecrets(data));
+      appendFileSync(join(logDir, logFileName()), `${parts.join(" ")}\n`, "utf8");
+    } catch {
+      // Logging must never crash the daemon.
+    }
   }
 
   return {
@@ -51,7 +55,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     warn: (message, data) => write("WARN", message, data),
     error: (message, data) => write("ERROR", message, data),
     debug: (message, data) => {
-      if (process.env.WECHAT_CODEX_BRIDGE_DEBUG === "1") write("DEBUG", message, data);
+      if (process.env.WECHAT_AGENT_BRIDGE_DEBUG === "1" || process.env.WECHAT_CODEX_BRIDGE_DEBUG === "1") write("DEBUG", message, data);
     },
   };
 }

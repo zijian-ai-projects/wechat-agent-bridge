@@ -48,7 +48,7 @@ export function formatCodexLoginGuidance(status: CodexLoginStatus): string {
     `Codex 尚未登录: ${status.message}`,
     "请先在当前系统用户的终端运行 codex login。",
     "如果浏览器回调不方便，请运行 codex login --device-auth。",
-    "wechat-codex-bridge 默认复用当前用户的 Codex 登录态，不要求配置 OPENAI_API_KEY。",
+    "wechat-agent-bridge 默认复用当前用户的 Codex 登录态，不要求配置 OPENAI_API_KEY。",
   ].join("\n");
 }
 

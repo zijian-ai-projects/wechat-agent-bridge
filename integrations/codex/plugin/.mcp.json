@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "wechat-agent-bridge": {
+      "command": "npm",
+      "args": ["--prefix", "/ABSOLUTE/PATH/TO/wechat-agent-bridge", "run", "mcp"],
+      "env": {}
+    }
+  }
+}
