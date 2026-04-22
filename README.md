@@ -1,31 +1,48 @@
 # wechat-agent-bridge
 
-个人微信 `<->` 本机 coding agent daemon 桥接器。v1 默认使用 Codex 后端，只服务一个绑定微信号和当前系统用户的本机 Codex 登录态。
+> 把个人微信私聊连接到本机 coding agent daemon，让你可以从微信控制本机 Codex，并通过 MCP 接入其他 agent 客户端。
 
-## V1 边界
+其他语言 / Other Languages:
+[English](README_EN.md) · [日本語](README_JA.md) · [한국어](README_KO.md) · [Español](README_ES.md)
 
-- 只处理绑定微信号本人的私聊消息：`msg.from_user_id === boundUserId`。
-- 默认忽略群聊、陌生人、非绑定用户、bot 消息。
-- 不做多用户共享、团队协作、公共 bot 或 system 级共享服务。
-- daemon 默认以当前登录用户身份运行，以复用该用户已有的 Codex CLI 登录缓存。
+wechat-agent-bridge 是一个个人本地桥接器：它监听一个绑定微信号的私聊消息，把普通消息交给本机 coding agent 执行，并把进度和结果回传到微信。
 
-## 当前分层
+它不是公共 bot，也不是团队共享服务。v1 默认使用 Codex CLI 后端，只服务一个绑定微信号和当前系统用户的本机 Codex 登录态。
 
-项目仍是单仓库单 package，但运行逻辑已拆成 core + adapters：
+## 效果示例
 
-- `src/core`: 平台无关服务层，负责 bridge 编排、session、mode/cwd/model 状态、agent turn lifecycle 和 WeChat 状态视图。
-- `src/backend`: agent 后端适配层。当前真正可运行的是 `CodexExecBackend`；`ClaudeCodeBackend` 和 `CursorAgentBackend` 只是后续扩展点。
-- `src/runtime`: v1 微信 daemon 装配层，负责 preflight、账号/session 加载、WeChat monitor 和 signal shutdown。
-- `src/mcp`: stdio MCP server，把 core 能力暴露成统一工具。
-- `integrations`: Codex plugin/skill/MCP 包装基础，以及 Claude/Cursor 的模板和映射说明。
+微信里发送：
 
-这样做是为了先保持 v1 稳定可运行，再通过 MCP 和薄包装层逐步兼容 Codex / Claude / Cursor；不会为了“看起来三平台统一”而写不可验证的伪 backend。
+```text
+/status
+```
 
-## 运行前提
+可能返回：
+
+```text
+状态：idle
+模式：readonly
+当前目录：/Users/you/projects/app
+最近会话：无进行中的任务
+```
+
+微信里发送普通需求：
+
+```text
+帮我看一下这个 repo 的测试为什么失败，并给出修复建议。
+```
+
+bridge 会把这条消息作为 prompt 传给本机 Codex CLI。Codex 的进度会按节流间隔同步到微信，最终结果会回到同一个私聊窗口。
+
+## 安装与启动
+
+### 前提
 
 1. Node.js 20+。
 2. 已安装本机 `codex` CLI。
-3. 推荐先在终端完成：
+3. 当前系统用户已经登录 Codex CLI。
+
+推荐先在终端完成：
 
 ```bash
 codex login
@@ -37,42 +54,18 @@ codex login
 codex login --device-auth
 ```
 
-然后再启动本项目：
+### 前台运行
 
 ```bash
+cd /path/to/wechat-agent-bridge
 npm install
 npm run setup
 npm run start
 ```
 
-## 登录方式优先级
+`setup` 会检查 Codex CLI、扫码绑定微信，并保存默认工作目录和 allowlist repo roots。
 
-本项目不能也不会设计成 API key-only。
-
-优先级：
-
-1. 当前系统用户已有的 Codex CLI ChatGPT 登录态。
-2. 当前系统用户已有的 Codex CLI API key 登录态。
-3. API key 仅作为 Codex CLI 自身支持的可选 fallback，不是默认路径。
-
-`setup` 和 `start` 会先检查 `codex` 是否存在，再运行 `codex login status`。如果检测到 `Logged in using ChatGPT`，会直接按 ChatGPT 登录态运行，不要求 `OPENAI_API_KEY`，也不会用 API key 覆盖。
-
-## 本地运行
-
-```bash
-npm run typecheck
-npm test
-npm run setup
-npm run start
-```
-
-启动 MCP server：
-
-```bash
-npm run mcp
-```
-
-后台运行：
+### 后台运行
 
 ```bash
 npm run build
@@ -80,104 +73,26 @@ npm run daemon -- start
 npm run daemon -- status
 npm run daemon -- logs
 npm run daemon -- stop
+npm run daemon -- restart
 ```
 
 后台 daemon 也是用户级进程，默认复用当前用户的 Codex 登录态。不要把 v1 当成 system 级共享服务运行。
 
-## MCP Server
+## 本地数据
 
-本地 MCP server 使用 stdio，工具返回稳定 JSON：
-
-```json
-{ "ok": true, "data": {} }
-```
-
-或：
-
-```json
-{ "ok": false, "error": { "code": "INVALID_ARGUMENT", "message": "..." } }
-```
-
-工具：
-
-- `wechat_status`
-- `wechat_bind_status`
-- `wechat_history`
-- `session_clear`
-- `agent_resume`
-- `agent_interrupt`
-- `agent_set_mode`
-- `agent_set_cwd`
-
-推荐给外部 MCP client 使用绝对路径：
-
-```bash
-npm --prefix /ABSOLUTE/PATH/TO/wechat-agent-bridge run mcp
-```
-
-Codex CLI 注册示例：
-
-```bash
-codex mcp add wechat-agent-bridge -- npm --prefix /ABSOLUTE/PATH/TO/wechat-agent-bridge run mcp
-```
-
-详见 `docs/mcp.md`。
-
-默认本地数据目录现在是 `~/.wechat-agent-bridge`。也可以用 `WECHAT_AGENT_BRIDGE_HOME` 指定目录；旧的 `WECHAT_CODEX_BRIDGE_HOME` 仍作为兼容 fallback 被接受。
-
-## Setup / Start 自检
-
-失败会返回清晰错误，不静默降级。
-
-- `codex` 是否存在。
-- `codex login status` 是否为 ChatGPT 或 API key 登录。
-- 默认 cwd 是否存在且可访问。
-- 默认 cwd 是否在 allowlist repo roots 内。
-- 默认 cwd 是否为 Git repo root 或位于 Git repo 内；setup 会保存 repo root。
-- `/cwd` 只能切到 allowlist 中的 Git repo root。
-
-默认不传 `--skip-git-repo-check`。只有未来显式配置并确认某个 allowlist 目录允许跳过时，才会考虑该能力；v1 默认不启用。
-
-## 允许写入兄弟目录
-
-`workspace` 模式下，Codex 默认只能写当前 `cwd`。如果你要让它创建或修改兄弟目录，例如：
+默认数据目录：
 
 ```text
-/Users/lixinyao/.codex/projects/SageTalk
+~/.wechat-agent-bridge
 ```
 
-需要在 `~/.wechat-agent-bridge/config.json` 里显式配置 `extraWritableRoots`。如果目标目录还不存在，要把它的父目录加入额外可写根：
+可以用 `WECHAT_AGENT_BRIDGE_HOME` 指定目录。旧的 `WECHAT_CODEX_BRIDGE_HOME` 仍作为兼容 fallback 被接受。
 
-```json
-{
-  "defaultCwd": "/Users/lixinyao/.codex/projects/wechat-agent-bridge",
-  "allowlistRoots": [
-    "/Users/lixinyao/.codex/projects/wechat-agent-bridge"
-  ],
-  "extraWritableRoots": [
-    "/Users/lixinyao/.codex/projects"
-  ],
-  "streamIntervalMs": 10000
-}
-```
-
-然后重启 daemon：
-
-```bash
-npm run daemon -- restart
-```
-
-`extraWritableRoots` 会被转换为 `codex --add-dir <path>`，只在 `workspace` 模式下用于 sandbox 额外写入范围。
-
-## Codex 模式
-
-- `readonly` 默认：`--sandbox read-only --ask-for-approval never`
-- `workspace`：`--sandbox workspace-write --ask-for-approval never`
-- `yolo`：`--dangerously-bypass-approvals-and-sandbox`
-
-只有显式发送 `/mode yolo` 后才启用 yolo，并会返回危险警告。
+配置、账号、session 和 sync buffer 会以 `0600` 写入。日志会脱敏，不能包含 token、cookie、Authorization header 或 Codex auth 文件内容。
 
 ## Slash Commands
+
+微信私聊里可以发送：
 
 - `/help`
 - `/clear`
@@ -189,44 +104,166 @@ npm run daemon -- restart
 
 `/clear` 会丢弃旧 Codex session/thread id，下次普通消息开启全新会话。非 `/clear` 的继续对话优先使用 `codex exec resume <SESSION_ID>`。
 
-## Platform Integrations
+## Codex 模式
 
-`integrations/codex` 当前最完整，包含：
+| 模式 | Codex sandbox |
+| --- | --- |
+| `readonly` | `--sandbox read-only --ask-for-approval never` |
+| `workspace` | `--sandbox workspace-write --ask-for-approval never` |
+| `yolo` | `--dangerously-bypass-approvals-and-sandbox` |
 
-- `plugin/.codex-plugin/plugin.json`
-- `plugin/.mcp.json`
-- `plugin/skills/wechat-agent-bridge/SKILL.md`
+默认是 `readonly`。只有显式发送 `/mode yolo` 后才启用 yolo，并会返回危险警告。
 
-已核对当前本机 Codex CLI 支持 `codex mcp add` 和 `codex plugin marketplace add`，但没有 `codex plugin create/install/list`，所以文档不写不存在的安装命令。
+如果要让 `workspace` 模式写入兄弟目录，例如：
 
-`integrations/claude` 和 `integrations/cursor` 当前只放 MCP 配置模板、skill/rules 草案和工具映射说明。后续接入方式是复用同一个 MCP server，而不是绕过 core 直接调用内部文件。
-
-## 认证排查
-
-如果 `setup` 或 `start` 提示未登录：
-
-```bash
-codex login status
-codex login
+```text
+/Users/you/projects/another-repo
 ```
 
-浏览器回调不方便时：
+需要在 `~/.wechat-agent-bridge/config.json` 里显式配置 `extraWritableRoots`：
 
-```bash
-codex login --device-auth
+```json
+{
+  "defaultCwd": "/Users/you/projects/wechat-agent-bridge",
+  "allowlistRoots": [
+    "/Users/you/projects/wechat-agent-bridge"
+  ],
+  "extraWritableRoots": [
+    "/Users/you/projects"
+  ],
+  "streamIntervalMs": 10000
+}
 ```
 
-如果前台能用、后台 daemon 不能读取登录态，通常是后台环境无法访问当前用户 keyring。请确认 daemon 是当前用户启动的；必要时按 Codex CLI 配置将 `cli_auth_credentials_store` 切到 `file`。file 模式只应读取 `CODEX_HOME/auth.json`，默认 `~/.codex/auth.json`，并确保权限为 `0600`。
+然后重启 daemon：
 
-日志永远不应包含 `auth.json` 内容、token、refresh token、cookie 或 Authorization header。
+```bash
+npm run daemon -- restart
+```
 
-## 安全默认值
+## MCP Server
 
-- 微信文本只作为 Codex prompt 传入，绝不当 shell 拼接执行。
-- 只有 Codex 自己决定是否调用命令。
-- 配置、账号、session、sync buffer 以 `0600` 写入。
-- 所有路径做 normalize + `realpath` 校验。
-- stdout JSONL 和 stderr 日志严格分离：`codex exec --json` 只解析 stdout JSONL，stderr 只用于日志和错误信息。
+项目同时提供本地 stdio MCP server。Codex、Claude、Cursor 或其他 MCP client 可以通过同一组工具调用 bridge 的 core services。
+
+启动 MCP server：
+
+```bash
+npm run mcp
+```
+
+给外部 MCP client 使用时，推荐绝对路径：
+
+```bash
+npm --prefix /ABSOLUTE/PATH/TO/wechat-agent-bridge run mcp
+```
+
+Codex CLI 注册示例：
+
+```bash
+codex mcp add wechat-agent-bridge -- npm --prefix /ABSOLUTE/PATH/TO/wechat-agent-bridge run mcp
+```
+
+可用工具：
+
+| Tool | 用途 |
+| --- | --- |
+| `wechat_status` | 查看绑定用户和当前 session 状态。 |
+| `wechat_bind_status` | 查看是否已绑定微信账号。 |
+| `wechat_history` | 读取最近本地 bridge history。 |
+| `session_clear` | 中断当前任务并清空 session/history/session id。 |
+| `agent_resume` | 通过当前本地后端运行 prompt。 |
+| `agent_interrupt` | 中断当前本地后端进程。 |
+| `agent_set_mode` | 切换 `readonly`、`workspace` 或 `yolo`。 |
+| `agent_set_cwd` | 切换到 allowlist 中的 Git repo root。 |
+
+详见 [docs/mcp.md](docs/mcp.md)。
+
+## 平台支持
+
+当前是 Codex-first，但 core 已经按 agent-ready 方向拆分：
+
+- Codex CLI：v1 唯一真正可运行的后端。
+- Codex MCP / plugin：`integrations/codex` 提供基础包装。
+- Claude Code：`integrations/claude` 提供 MCP 配置模板和 skill 草案。
+- Cursor：`integrations/cursor` 提供 MCP 配置模板和 rules 草案。
+
+`ClaudeCodeBackend` 和 `CursorAgentBackend` 当前只是 typed extension points。只有当执行、resume、interrupt 和凭据语义明确后，才会实现真实 backend。
+
+## 当前边界
+
+- 只处理绑定微信号本人的私聊消息。
+- 默认忽略群聊、陌生人、非绑定用户和 bot 消息。
+- 不做多用户共享、团队协作、公共 bot 或远程托管。
+- daemon 默认以当前登录用户身份运行。
+- `setup` 和 `start` 会检查 `codex` 是否存在、Codex 登录态、默认 cwd 和 allowlist。
+- `/cwd` 只能切到 allowlist 中的 Git repo root。
+- 默认不启用 `--skip-git-repo-check`。
+
+这些边界是 v1 的安全默认值，不是临时限制。
+
+## 工作原理
+
+```text
+微信私聊消息
+  ↓
+WeChatMonitor 拉取消息
+  ↓
+BridgeService 过滤用户、处理 slash command 或普通 prompt
+  ↓
+AgentService 调用当前 AgentBackend
+  ↓
+CodexExecBackend 执行 codex exec / codex exec resume
+  ↓
+StreamBuffer 节流同步进度
+  ↓
+WeChatSender 回传结果
+```
+
+MCP server 复用同一组 core services，不复制业务逻辑，也不绕过 allowlist 和 session 规则。
+
+## 仓库结构
+
+```text
+.
+├── README.md
+├── README_EN.md
+├── README_JA.md
+├── README_KO.md
+├── README_ES.md
+├── docs/
+│   ├── architecture.md
+│   ├── design-process.md
+│   ├── implementation-plan.md
+│   ├── integrations.md
+│   └── mcp.md
+├── integrations/
+│   ├── claude/
+│   ├── codex/
+│   └── cursor/
+├── src/
+│   ├── backend/
+│   ├── core/
+│   ├── mcp/
+│   ├── runtime/
+│   ├── setup/
+│   └── wechat/
+└── tests/
+```
+
+## Design Notes
+
+- [docs/design-process.md](docs/design-process.md): 项目设计演进记录。
+- [docs/architecture.md](docs/architecture.md): 当前架构边界。
+- [docs/mcp.md](docs/mcp.md): MCP server 和工具契约。
+- [docs/integrations.md](docs/integrations.md): Codex / Claude / Cursor integration 策略。
+
+## 开发与验证
+
+```bash
+npm run typecheck
+npm test
+npm run build
+```
 
 ## 参考架构来源
 
