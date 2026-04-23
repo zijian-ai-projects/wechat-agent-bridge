@@ -122,10 +122,14 @@ export async function shutdownProjectBridgeRuntime(
 
 function createCompatProjectSessionStore(session: BridgeSession, store: SessionStorePort): ProjectSessionStore {
   return {
-    async load(userId: string, project: ProjectDefinition): Promise<ProjectSession> {
+    async load(userId: string, project: ProjectDefinition, defaults: { resetStaleProcessing?: boolean } = {}): Promise<ProjectSession> {
       session.userId = userId;
       session.cwd = project.cwd;
       session.allowlistRoots = [project.cwd];
+      if (defaults.resetStaleProcessing && session.state !== "idle") {
+        session.state = "idle";
+        delete session.activeTurnId;
+      }
       return Object.assign(session, { projectAlias: project.alias });
     },
 

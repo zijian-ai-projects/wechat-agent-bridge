@@ -129,7 +129,7 @@ test("ordinary messages preserve leading whitespace through the compat project m
   assert.equal(backend.startRequests[0]?.prompt, "  keep literal spacing");
 });
 
-test("new ordinary message rejects same-project busy turn without interrupting it", async () => {
+test("compat helper resets stale processing state before routing a new message", async () => {
   const backend = new FakeBackend();
   const sender = new FakeSender();
   const session = makeSession({ state: "processing" });
@@ -138,8 +138,9 @@ test("new ordinary message rejects same-project busy turn without interrupting i
 
   assert.deepEqual(backend.interrupts, []);
   assert.equal(backend.startRequests.length, 0);
-  assert.equal(backend.resumeRequests.length, 0);
-  assert.match(sender.messages[0] ?? "", /正在处理上一轮任务/);
+  assert.equal(backend.resumeRequests.length, 1);
+  assert.equal(backend.resumeRequests[0]?.prompt, "new task");
+  assert.equal(sender.messages.length, 0);
 });
 
 test("/clear clears the default project session and does not resume old session", async () => {

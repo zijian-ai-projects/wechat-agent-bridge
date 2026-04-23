@@ -245,6 +245,17 @@ test("BridgeService routes @Project prompts without changing active project", as
   assert.deepEqual(projectManager.prompts, [{ projectAlias: "SageTalk", prompt: "run tests", toUserId: "user-1", contextToken: "ctx" }]);
 });
 
+test("BridgeService replies clearly for unknown @Project prompts", async () => {
+  const { bridge, projectManager, sender } = makeProjectBridge();
+
+  await bridge.handleMessage(textMessage("user-1", "@Missing run tests"));
+
+  assert.equal(projectManager.prompts.length, 0);
+  assert.match(sender.messages[0] ?? "", /未知项目: Missing/);
+  assert.match(sender.messages[0] ?? "", /bridge/);
+  assert.match(sender.messages[0] ?? "", /SageTalk/);
+});
+
 test("BridgeService routes ordinary prompts to the active project with full text", async () => {
   const { bridge, projectManager } = makeProjectBridge();
 
