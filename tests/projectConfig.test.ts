@@ -72,6 +72,56 @@ test("loadConfig preserves an explicit defaultProject even when it is invalid", 
   });
 });
 
+test("loadConfig preserves explicit empty projects without falling back to legacy config", async () => {
+  await withTempConfigHome(async () => {
+    const bridge = await makeGitRepo("wcb-bridge-");
+    try {
+      saveSecureJson(getConfigPath(), {
+        defaultCwd: bridge,
+        allowlistRoots: [bridge],
+        defaultProject: "bridge",
+        projects: {},
+        extraWritableRoots: [],
+        streamIntervalMs: 1,
+      });
+
+      const config = loadConfig();
+      assert.deepEqual(config.projects, {});
+      await assert.rejects(resolveProjectRegistry(config), /No projects configured\./);
+    } finally {
+      await rm(bridge, { recursive: true, force: true });
+    }
+  });
+});
+
+test("loadConfig normalizes legacy fields from an explicit default project", async () => {
+  await withTempConfigHome(async () => {
+    const repoA = await makeGitRepo("wcb-a-");
+    const repoB = await makeGitRepo("wcb-b-");
+    try {
+      saveSecureJson(getConfigPath(), {
+        defaultCwd: repoA,
+        allowlistRoots: [repoA],
+        defaultProject: "sage",
+        projects: {
+          bridge: { cwd: repoA },
+          sage: { cwd: repoB },
+        },
+        extraWritableRoots: [],
+        streamIntervalMs: 1,
+      });
+
+      const config = loadConfig();
+      assert.equal(config.defaultProject, "sage");
+      assert.equal(config.defaultCwd, repoB);
+      assert.deepEqual(new Set(config.allowlistRoots), new Set([repoA, repoB]));
+    } finally {
+      await rm(repoA, { recursive: true, force: true });
+      await rm(repoB, { recursive: true, force: true });
+    }
+  });
+});
+
 test("createLegacyProjects sanitizes legacy aliases and resolves collisions", () => {
   const projects = createLegacyProjects("/tmp/wechat-agent-bridge", [
     "/tmp/foo.bar",
@@ -84,6 +134,13 @@ test("createLegacyProjects sanitizes legacy aliases and resolves collisions", ()
   assert.equal(projects.projects["foo-bar-2"].cwd, "/tmp/foo bar");
   assert.equal(projects.projects.config.cwd, "/tmp/.config");
   assert.equal(projects.projects.project.cwd, "/tmp/项目");
+});
+
+test("createLegacyProjects avoids prototype-name collisions", () => {
+  const projects = createLegacyProjects("/tmp/wechat-agent-bridge", ["/tmp/constructor", "/tmp/toString"]);
+
+  assert.equal(projects.projects["constructor"].cwd, "/tmp/constructor");
+  assert.equal(projects.projects["toString"].cwd, "/tmp/toString");
 });
 
 test("createLegacyProjects derives aliases from allowlist roots", () => {

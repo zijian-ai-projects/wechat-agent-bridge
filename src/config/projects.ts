@@ -57,12 +57,12 @@ export function validateProjectAlias(alias: string): string {
 
 export function createLegacyProjects(defaultCwd: string, allowlistRoots: string[]): Required<ProjectConfigShape> {
   const roots = allowlistRoots.length > 0 ? allowlistRoots : [defaultCwd];
-  const projects: Record<string, ProjectConfigEntry> = {};
+  const projects: Record<string, ProjectConfigEntry> = Object.create(null);
   for (const root of roots) {
     const baseAlias = sanitizeLegacyProjectAlias(basename(root));
     let alias = baseAlias;
     let suffix = 2;
-    while (projects[alias]) {
+    while (Object.prototype.hasOwnProperty.call(projects, alias)) {
       alias = `${baseAlias}-${suffix}`;
       suffix += 1;
     }

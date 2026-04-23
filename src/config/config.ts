@@ -20,16 +20,44 @@ export interface BridgeConfig {
 type BridgeConfigInput = Pick<BridgeConfig, "defaultCwd" | "allowlistRoots" | "extraWritableRoots" | "streamIntervalMs"> &
   Partial<Pick<BridgeConfig, "defaultProject" | "projects">>;
 
-function normalizeProjects(config: BridgeConfigInput): Pick<BridgeConfig, "defaultProject" | "projects"> {
-  if (config.projects && Object.keys(config.projects).length > 0) {
-    const defaultProject = config.defaultProject ?? Object.keys(config.projects)[0];
+function normalizeProjects(config: BridgeConfigInput): BridgeConfig {
+  if (config.projects === undefined) {
+    const legacy = createLegacyProjects(config.defaultCwd, config.allowlistRoots);
     return {
+      defaultCwd: config.defaultCwd,
+      allowlistRoots: config.allowlistRoots,
+      extraWritableRoots: config.extraWritableRoots,
+      streamIntervalMs: config.streamIntervalMs,
+      defaultProject: legacy.defaultProject,
+      projects: legacy.projects,
+    };
+  }
+
+  const projectEntries = Object.entries(config.projects);
+  const defaultProject = config.defaultProject;
+  const hasValidDefaultProject =
+    defaultProject !== undefined && Object.prototype.hasOwnProperty.call(config.projects, defaultProject);
+
+  if (hasValidDefaultProject) {
+    const allowlistRoots = projectEntries.map(([, project]) => project.cwd);
+    return {
+      defaultCwd: config.projects[defaultProject].cwd,
+      allowlistRoots,
+      extraWritableRoots: config.extraWritableRoots,
+      streamIntervalMs: config.streamIntervalMs,
       defaultProject,
       projects: config.projects,
     };
   }
 
-  return createLegacyProjects(config.defaultCwd, config.allowlistRoots);
+  return {
+    defaultCwd: config.defaultCwd,
+    allowlistRoots: config.allowlistRoots,
+    extraWritableRoots: config.extraWritableRoots,
+    streamIntervalMs: config.streamIntervalMs,
+    defaultProject: config.defaultProject ?? "",
+    projects: config.projects,
+  };
 }
 
 export function loadConfig(): BridgeConfig {
@@ -37,7 +65,7 @@ export function loadConfig(): BridgeConfig {
   const config = loadSecureJson<Partial<BridgeConfigInput>>(getConfigPath(), {});
   const defaultCwd = config.defaultCwd ?? cwd;
   const allowlistRoots = config.allowlistRoots?.length ? config.allowlistRoots : [defaultCwd];
-  const projects = normalizeProjects({
+  return normalizeProjects({
     defaultCwd,
     allowlistRoots,
     extraWritableRoots: config.extraWritableRoots ?? [],
@@ -45,14 +73,6 @@ export function loadConfig(): BridgeConfig {
     defaultProject: config.defaultProject,
     projects: config.projects,
   });
-  return {
-    defaultCwd,
-    allowlistRoots,
-    extraWritableRoots: config.extraWritableRoots ?? [],
-    streamIntervalMs: config.streamIntervalMs ?? 10_000,
-    defaultProject: projects.defaultProject,
-    projects: projects.projects,
-  };
 }
 
 export function saveConfig(config: BridgeConfigInput): void {
