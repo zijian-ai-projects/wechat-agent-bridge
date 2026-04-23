@@ -3,8 +3,11 @@ import {
   handleCwd,
   handleHelp,
   handleHistory,
+  handleInterrupt,
   handleMode,
   handleModel,
+  handleProject,
+  handleReplace,
   handleStatus,
   handleUnknown,
   type CommandContext,
@@ -14,29 +17,41 @@ import {
 export type { CommandContext, CommandResult } from "./handlers.js";
 
 export async function routeCommand(ctx: CommandContext): Promise<CommandResult> {
-  const text = ctx.text.trim();
+  const text = ctx.text.trimStart();
   if (!text.startsWith("/")) return { handled: false };
 
-  const spaceIndex = text.indexOf(" ");
-  const command = (spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex)).toLowerCase();
-  const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+  const commandMatch = /^\/(\S+)([\s\S]*)$/.exec(text);
+  if (!commandMatch) return { handled: false };
+  const command = commandMatch[1].toLowerCase();
+  const args = commandMatch[2].replace(/^\s/, "");
 
-  switch (command) {
-    case "help":
-      return handleHelp();
-    case "clear":
-      return handleClear(ctx);
-    case "status":
-      return handleStatus(ctx);
-    case "cwd":
-      return handleCwd(ctx, args);
-    case "model":
-      return handleModel(ctx, args);
-    case "mode":
-      return handleMode(ctx, args);
-    case "history":
-      return handleHistory(ctx, args);
-    default:
-      return handleUnknown(command);
+  try {
+    switch (command) {
+      case "help":
+        return handleHelp();
+      case "project":
+        return handleProject(ctx, args);
+      case "interrupt":
+        return handleInterrupt(ctx, args);
+      case "replace":
+        return handleReplace(ctx, args);
+      case "clear":
+        return handleClear(ctx, args);
+      case "status":
+        return handleStatus(ctx, args);
+      case "cwd":
+        return handleCwd(ctx, args);
+      case "model":
+        return handleModel(ctx, args);
+      case "mode":
+        return handleMode(ctx, args);
+      case "history":
+        return handleHistory(ctx, args);
+      default:
+        return handleUnknown(command);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { handled: true, reply: `命令执行失败: ${message}` };
   }
 }
