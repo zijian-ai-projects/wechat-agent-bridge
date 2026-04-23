@@ -76,7 +76,10 @@ export class ProjectRuntime {
     const prefix = `[${this.project.alias}] `;
     const stream = new StreamBuffer({
       intervalMs: this.streamIntervalMs,
-      send: (chunk) => this.sender.sendText(options.toUserId, options.contextToken, chunk),
+      send: async (chunk) => {
+        if (session.activeTurnId !== turnId) return;
+        await this.sender.sendText(options.toUserId, options.contextToken, chunk);
+      },
     });
 
     try {
@@ -109,6 +112,7 @@ export class ProjectRuntime {
         },
       );
 
+      if (session.activeTurnId !== turnId) return;
       await stream.flush(true);
       if (session.activeTurnId !== turnId) return;
       if (result.clearedStaleSession) {

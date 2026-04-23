@@ -55,7 +55,7 @@ export class ProjectRuntimeManager {
   }
 
   runtime(alias = this.activeAlias): ProjectRuntime {
-    const project = this.registry.get(alias);
+    const project = this.registry.get(this.resolveAlias(alias));
     let runtime = this.runtimes.get(project.alias);
     if (!runtime) {
       runtime = new ProjectRuntime({
@@ -73,7 +73,7 @@ export class ProjectRuntimeManager {
   }
 
   async runPrompt(options: ManagerRunPromptOptions): Promise<void> {
-    const alias = options.projectAlias ?? this.activeAlias;
+    const alias = this.resolveAlias(options.projectAlias);
     const runtime = this.runtime(alias);
     try {
       await runtime.runPrompt({
@@ -93,9 +93,10 @@ export class ProjectRuntimeManager {
   }
 
   async replacePrompt(options: ManagerRunPromptOptions): Promise<void> {
-    const runtime = this.runtime(options.projectAlias);
+    const alias = this.resolveAlias(options.projectAlias);
+    const runtime = this.runtime(alias);
     await runtime.interrupt();
-    await this.runPrompt(options);
+    await this.runPrompt({ ...options, projectAlias: alias });
   }
 
   async interrupt(alias?: string): Promise<void> {
@@ -133,5 +134,9 @@ export class ProjectRuntimeManager {
 
   listProjects(): ProjectDefinition[] {
     return this.registry.list();
+  }
+
+  private resolveAlias(alias?: string): string {
+    return this.registry.get(alias ?? this.activeAlias).alias;
   }
 }

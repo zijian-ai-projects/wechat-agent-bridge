@@ -23,6 +23,7 @@ class FakeBackend implements AgentBackend {
   interrupts: string[] = [];
   startRequests: AgentTurnRequest[] = [];
   resumeRequests: AgentTurnRequest[] = [];
+  onInterrupt?: (executionKey: string) => Promise<void> | void;
   private readonly queue: QueuedTurn[] = [];
   private readonly releases = new Map<string, () => void>();
 
@@ -55,6 +56,7 @@ class FakeBackend implements AgentBackend {
 
   async interrupt(executionKey: string): Promise<void> {
     this.interrupts.push(executionKey);
+    await this.onInterrupt?.(executionKey);
   }
 
   formatEventForWechat(): string | undefined {
@@ -147,7 +149,7 @@ const account: Pick<AccountData, "boundUserId"> = { boundUserId: "user-1" };
 const bridgeProject: ProjectDefinition = { alias: "bridge", cwd: "/tmp/bridge" };
 const sageProject: ProjectDefinition = { alias: "SageTalk", cwd: "/tmp/sage" };
 
-function makeManager(): {
+function makeManager(options: { streamIntervalMs?: number } = {}): {
   manager: ProjectRuntimeManager;
   backend: FakeBackend;
   store: MemoryProjectSessionStore;
@@ -162,7 +164,7 @@ function makeManager(): {
     sessionStore: store as unknown as ProjectSessionStore,
     sender,
     agentService: new AgentService(backend),
-    streamIntervalMs: 0,
+    streamIntervalMs: options.streamIntervalMs ?? 0,
     extraWritableRoots: ["/tmp/extra"],
   });
   return { manager, backend, store, sender };
@@ -225,6 +227,42 @@ test("replacePrompt interrupts target execution key then starts replacement prom
 
   backend.release("bridge");
   await first;
+});
+
+test("interrupt prevents stale buffered output from an old project turn", async () => {
+  const { manager, backend, sender } = makeManager({ streamIntervalMs: 10_000 });
+  backend.enqueue({
+    text: "old result",
+    waitForRelease: "old",
+    events: [
+      { event: { type: "turn.started" }, formatted: "first progress" },
+      { event: { type: "item.completed" }, formatted: "stale buffered progress" },
+    ],
+  });
+
+  const oldRun = manager.runPrompt({ projectAlias: "bridge", prompt: "old", toUserId: "user-1", contextToken: "ctx" });
+  await waitFor(() => sender.messages.some((message) => message.text.includes("first progress")));
+  await manager.interrupt("bridge");
+  backend.release("old");
+  await oldRun;
+
+  const texts = sender.messages.map((message) => message.text);
+  assert.ok(texts.some((text) => text.includes("first progress")));
+  assert.equal(texts.some((text) => text.includes("stale buffered progress")), false);
+});
+
+test("replacePrompt without an explicit alias keeps the original active project when interrupt changes active project", async () => {
+  const { manager, backend } = makeManager();
+  backend.onInterrupt = () => {
+    manager.setActiveProject("SageTalk");
+  };
+  backend.enqueue({ text: "replacement" });
+
+  await manager.replacePrompt({ prompt: "replacement", toUserId: "user-1", contextToken: "ctx" });
+
+  assert.deepEqual(backend.interrupts, ["user-1:bridge"]);
+  assert.equal(backend.startRequests[0].executionKey, "user-1:bridge");
+  assert.equal(backend.startRequests[0].cwd, bridgeProject.cwd);
 });
 
 test("active project streams all formatted events while background project only streams lifecycle and final output with prefix", async () => {
