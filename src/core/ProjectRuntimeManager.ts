@@ -24,6 +24,10 @@ export interface ManagerRunPromptOptions {
   contextToken: string;
 }
 
+export interface ProjectListEntry extends ProjectDefinition {
+  active: boolean;
+}
+
 const VALID_MODES = new Set<AgentMode>(["readonly", "workspace", "yolo"]);
 
 export class ProjectRuntimeManager {
@@ -46,6 +50,10 @@ export class ProjectRuntimeManager {
     this.streamIntervalMs = options.streamIntervalMs;
     this.extraWritableRoots = options.extraWritableRoots ?? [];
     this.activeAlias = options.registry.defaultAlias;
+  }
+
+  get activeProjectAlias(): string {
+    return this.activeAlias;
   }
 
   setActiveProject(alias: string): ProjectDefinition {
@@ -80,7 +88,7 @@ export class ProjectRuntimeManager {
         prompt: options.prompt,
         toUserId: options.toUserId,
         contextToken: options.contextToken,
-        active: alias === this.activeAlias,
+        isActive: () => alias === this.activeAlias,
       });
     } catch (error) {
       if (!(error instanceof BusyProjectError)) throw error;
@@ -115,7 +123,7 @@ export class ProjectRuntimeManager {
     return this.runtime(alias).session();
   }
 
-  async setMode(alias: string, mode: AgentMode | string): Promise<ProjectSession> {
+  async setMode(alias: string | undefined, mode: AgentMode | string): Promise<ProjectSession> {
     if (!VALID_MODES.has(mode as AgentMode)) {
       throw new Error(`Invalid mode: ${mode}. Expected readonly, workspace, or yolo.`);
     }
@@ -125,15 +133,15 @@ export class ProjectRuntimeManager {
     return session;
   }
 
-  async setModel(alias: string, model: string | undefined): Promise<ProjectSession> {
+  async setModel(alias: string | undefined, model: string | undefined): Promise<ProjectSession> {
     const session = await this.session(alias);
     session.model = model || undefined;
     await this.sessionStore.save(session);
     return session;
   }
 
-  listProjects(): ProjectDefinition[] {
-    return this.registry.list();
+  listProjects(): ProjectListEntry[] {
+    return this.registry.list().map((project) => ({ ...project, active: project.alias === this.activeAlias }));
   }
 
   private resolveAlias(alias?: string): string {

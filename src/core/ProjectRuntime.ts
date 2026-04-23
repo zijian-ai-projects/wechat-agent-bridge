@@ -30,7 +30,7 @@ export interface ProjectRunPromptOptions {
   prompt: string;
   toUserId: string;
   contextToken: string;
-  active: boolean;
+  isActive: () => boolean;
 }
 
 const LIFECYCLE_EVENT_TYPES = new Set(["turn.started", "turn.completed", "turn.failed"]);
@@ -78,7 +78,7 @@ export class ProjectRuntime {
       intervalMs: this.streamIntervalMs,
       send: async (chunk) => {
         if (session.activeTurnId !== turnId) return;
-        await this.sender.sendText(options.toUserId, options.contextToken, chunk);
+        await this.sender.sendText(options.toUserId, options.contextToken, options.isActive() ? chunk : prefixLines(prefix, chunk));
       },
     });
 
@@ -103,11 +103,11 @@ export class ProjectRuntime {
               session.codexThreadId = id;
             }
             if (!formatted) return;
-            if (options.active) {
+            if (options.isActive()) {
               await stream.append(formatted);
               return;
             }
-            if (isLifecycleEvent(event)) await stream.append(`${prefix}${formatted}`);
+            if (isLifecycleEvent(event)) await stream.append(formatted);
           },
         },
       );
@@ -125,15 +125,15 @@ export class ProjectRuntime {
       if (result.interrupted) return;
       if (result.text) {
         this.sessionStore.addHistory(session, "assistant", result.text);
-        if (!options.active) await this.sender.sendText(options.toUserId, options.contextToken, `${prefix}最终结果:\n${result.text}`);
+        if (!options.isActive()) await this.sendWithDynamicPrefix(options, prefix, `最终结果:\n${result.text}`);
         return;
       }
-      await this.sender.sendText(options.toUserId, options.contextToken, `${options.active ? "" : prefix}Codex 本轮无文本返回。`);
+      await this.sendWithDynamicPrefix(options, prefix, "Codex 本轮无文本返回。");
     } catch (error) {
       if (session.activeTurnId !== turnId) return;
       const message = error instanceof Error ? error.message : String(error);
       logger.error("Project Codex turn failed", { projectAlias: this.project.alias, error: message });
-      await this.sender.sendText(options.toUserId, options.contextToken, `${options.active ? "" : prefix}Codex 处理失败: ${message}`);
+      await this.sendWithDynamicPrefix(options, prefix, `Codex 处理失败: ${message}`);
     } finally {
       if (session.activeTurnId === turnId) {
         session.state = "idle";
@@ -157,8 +157,19 @@ export class ProjectRuntime {
     this.sessionPromise = Promise.resolve(session);
     return session;
   }
+
+  private async sendWithDynamicPrefix(options: ProjectRunPromptOptions, prefix: string, text: string): Promise<void> {
+    await this.sender.sendText(options.toUserId, options.contextToken, options.isActive() ? text : `${prefix}${text}`);
+  }
 }
 
 function isLifecycleEvent(event: unknown): boolean {
   return Boolean(event && typeof event === "object" && LIFECYCLE_EVENT_TYPES.has(String((event as { type?: unknown }).type)));
+}
+
+function prefixLines(prefix: string, text: string): string {
+  return text
+    .split("\n")
+    .map((line) => `${prefix}${line}`)
+    .join("\n");
 }

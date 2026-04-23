@@ -16,6 +16,7 @@ interface QueuedTurn {
   codexThreadId?: string;
   interrupted?: boolean;
   events?: Array<{ event: unknown; formatted?: string }>;
+  eventsAfterRelease?: Array<{ event: unknown; formatted?: string }>;
   waitForRelease?: string;
 }
 
@@ -70,6 +71,9 @@ class FakeBackend implements AgentBackend {
     }
     if (turn.waitForRelease) {
       await new Promise<void>((resolve) => this.releases.set(turn.waitForRelease!, resolve));
+    }
+    for (const item of turn.eventsAfterRelease ?? []) {
+      await callbacks.onEvent?.(item.event, item.formatted);
     }
     return {
       text: turn.text,
@@ -265,6 +269,54 @@ test("replacePrompt without an explicit alias keeps the original active project 
   assert.equal(backend.startRequests[0].cwd, bridgeProject.cwd);
 });
 
+test("running active project output becomes prefixed when the project moves to background", async () => {
+  const { manager, backend, sender } = makeManager({ streamIntervalMs: 10_000 });
+  backend.enqueue({
+    text: "bridge final",
+    waitForRelease: "bridge",
+    events: [
+      { event: { type: "turn.started" }, formatted: "first active progress" },
+      { event: { type: "item.completed" }, formatted: "buffered after background\nsecond line" },
+    ],
+  });
+
+  const bridgeRun = manager.runPrompt({ projectAlias: "bridge", prompt: "bridge", toUserId: "user-1", contextToken: "ctx" });
+  await waitFor(() => sender.messages.some((message) => message.text === "first active progress"));
+  manager.setActiveProject("SageTalk");
+  backend.release("bridge");
+  await bridgeRun;
+
+  assert.deepEqual(
+    sender.messages.map((message) => message.text),
+    [
+      "first active progress",
+      "[bridge] buffered after background\n[bridge] second line",
+      "[bridge] 最终结果:\nbridge final",
+    ],
+  );
+});
+
+test("running background project output becomes unprefixed and complete when the project becomes active", async () => {
+  const { manager, backend, sender } = makeManager({ streamIntervalMs: 10_000 });
+  backend.enqueue({
+    text: "sage final",
+    waitForRelease: "sage",
+    events: [{ event: { type: "turn.started" }, formatted: "sage started" }],
+    eventsAfterRelease: [{ event: { type: "item.completed" }, formatted: "active non-lifecycle" }],
+  });
+
+  const sageRun = manager.runPrompt({ projectAlias: "SageTalk", prompt: "sage", toUserId: "user-1", contextToken: "ctx" });
+  await waitFor(() => sender.messages.some((message) => message.text === "[SageTalk] sage started"));
+  manager.setActiveProject("SageTalk");
+  backend.release("sage");
+  await sageRun;
+
+  assert.deepEqual(
+    sender.messages.map((message) => message.text),
+    ["[SageTalk] sage started", "active non-lifecycle"],
+  );
+});
+
 test("active project streams all formatted events while background project only streams lifecycle and final output with prefix", async () => {
   const { manager, backend, sender } = makeManager();
   backend.enqueue({
@@ -298,14 +350,35 @@ test("setMode and setModel update only targeted project session", async () => {
 
   await manager.setMode("SageTalk", "workspace");
   await manager.setModel("SageTalk", "gpt-5.4-codex");
+  manager.setActiveProject("bridge");
+  await manager.setMode(undefined, "yolo");
+  await manager.setModel(undefined, "active-model");
 
   const bridge = await manager.session("bridge");
   const sage = await manager.session("SageTalk");
-  assert.equal(bridge.mode, "readonly");
-  assert.equal(bridge.model, undefined);
+  assert.equal(bridge.mode, "yolo");
+  assert.equal(bridge.model, "active-model");
   assert.equal(sage.mode, "workspace");
   assert.equal(sage.model, "gpt-5.4-codex");
   await assert.rejects(manager.setMode("bridge", "invalid"), /Invalid mode/);
+});
+
+test("manager exposes active project state in activeProjectAlias and listProjects", () => {
+  const { manager } = makeManager();
+
+  assert.equal(manager.activeProjectAlias, "bridge");
+  assert.deepEqual(manager.listProjects(), [
+    { alias: "bridge", cwd: bridgeProject.cwd, active: true },
+    { alias: "SageTalk", cwd: sageProject.cwd, active: false },
+  ]);
+
+  manager.setActiveProject("SageTalk");
+
+  assert.equal(manager.activeProjectAlias, "SageTalk");
+  assert.deepEqual(manager.listProjects(), [
+    { alias: "bridge", cwd: bridgeProject.cwd, active: false },
+    { alias: "SageTalk", cwd: sageProject.cwd, active: true },
+  ]);
 });
 
 test("clear resets only the targeted project session", async () => {
