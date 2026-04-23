@@ -144,11 +144,11 @@ export class ProjectRuntime {
   }
 
   async interrupt(): Promise<void> {
-    await this.agentService.interrupt(this.executionKey);
     const session = await this.session();
     session.state = "idle";
     session.activeTurnId = undefined;
     await this.sessionStore.save(session);
+    await this.agentService.interrupt(this.executionKey);
   }
 
   async clear(): Promise<ProjectSession> {
@@ -159,7 +159,7 @@ export class ProjectRuntime {
   }
 
   private async sendWithDynamicPrefix(options: ProjectRunPromptOptions, prefix: string, text: string): Promise<void> {
-    await this.sender.sendText(options.toUserId, options.contextToken, options.isActive() ? text : `${prefix}${text}`);
+    await this.sender.sendText(options.toUserId, options.contextToken, options.isActive() ? text : prefixLines(prefix, text));
   }
 }
 

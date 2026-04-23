@@ -25,6 +25,7 @@ class FakeBackend implements AgentBackend {
   startRequests: AgentTurnRequest[] = [];
   resumeRequests: AgentTurnRequest[] = [];
   onInterrupt?: (executionKey: string) => Promise<void> | void;
+  private latestCallbacks?: { onEvent?: (event: unknown, formatted?: string) => Promise<void> | void };
   private readonly queue: QueuedTurn[] = [];
   private readonly releases = new Map<string, () => void>();
 
@@ -44,6 +45,7 @@ class FakeBackend implements AgentBackend {
     callbacks: { onEvent?: (event: unknown, formatted?: string) => Promise<void> | void },
   ): Promise<AgentTurnResult> {
     this.startRequests.push(request);
+    this.latestCallbacks = callbacks;
     return this.runQueuedTurn(callbacks);
   }
 
@@ -52,6 +54,7 @@ class FakeBackend implements AgentBackend {
     callbacks: { onEvent?: (event: unknown, formatted?: string) => Promise<void> | void },
   ): Promise<AgentTurnResult> {
     this.resumeRequests.push(request);
+    this.latestCallbacks = callbacks;
     return this.runQueuedTurn(callbacks);
   }
 
@@ -62,6 +65,10 @@ class FakeBackend implements AgentBackend {
 
   formatEventForWechat(): string | undefined {
     return undefined;
+  }
+
+  async emitLatestEvent(event: unknown, formatted?: string): Promise<void> {
+    await this.latestCallbacks?.onEvent?.(event, formatted);
   }
 
   private async runQueuedTurn(callbacks: { onEvent?: (event: unknown, formatted?: string) => Promise<void> | void }): Promise<AgentTurnResult> {
@@ -255,6 +262,28 @@ test("interrupt prevents stale buffered output from an old project turn", async 
   assert.equal(texts.some((text) => text.includes("stale buffered progress")), false);
 });
 
+test("interrupt invalidates the active turn before backend interrupt can emit trailing events", async () => {
+  const { manager, backend, sender } = makeManager();
+  backend.enqueue({
+    text: "old result",
+    waitForRelease: "old",
+    events: [{ event: { type: "turn.started" }, formatted: "first progress" }],
+  });
+  backend.onInterrupt = async () => {
+    await backend.emitLatestEvent({ type: "item.completed" }, "interrupt-time stale progress");
+  };
+
+  const oldRun = manager.runPrompt({ projectAlias: "bridge", prompt: "old", toUserId: "user-1", contextToken: "ctx" });
+  await waitFor(() => sender.messages.some((message) => message.text === "first progress"));
+  await manager.interrupt("bridge");
+  backend.release("old");
+  await oldRun;
+
+  const texts = sender.messages.map((message) => message.text);
+  assert.ok(texts.includes("first progress"));
+  assert.equal(texts.some((text) => text.includes("interrupt-time stale progress")), false);
+});
+
 test("replacePrompt without an explicit alias keeps the original active project when interrupt changes active project", async () => {
   const { manager, backend } = makeManager();
   backend.onInterrupt = () => {
@@ -291,7 +320,7 @@ test("running active project output becomes prefixed when the project moves to b
     [
       "first active progress",
       "[bridge] buffered after background\n[bridge] second line",
-      "[bridge] 最终结果:\nbridge final",
+      "[bridge] 最终结果:\n[bridge] bridge final",
     ],
   );
 });
@@ -328,7 +357,7 @@ test("active project streams all formatted events while background project only 
     ],
   });
   backend.enqueue({
-    text: "background result",
+    text: "line 1\nline 2",
     events: [
       { event: { type: "turn.started" }, formatted: "bg started" },
       { event: { type: "agent.delta" }, formatted: "bg delta" },
@@ -341,7 +370,14 @@ test("active project streams all formatted events while background project only 
 
   assert.deepEqual(
     sender.messages.map((message) => message.text),
-    ["started", "delta", "completed", "[SageTalk] bg started", "[SageTalk] bg completed", "[SageTalk] 最终结果:\nbackground result"],
+    [
+      "started",
+      "delta",
+      "completed",
+      "[SageTalk] bg started",
+      "[SageTalk] bg completed",
+      "[SageTalk] 最终结果:\n[SageTalk] line 1\n[SageTalk] line 2",
+    ],
   );
 });
 
