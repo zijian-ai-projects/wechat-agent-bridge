@@ -169,3 +169,19 @@ test("ProjectSessionStore forces persisted identity and project fields to curren
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("ProjectSessionStore rejects unsafe nested storage path segments", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wcb-project-session-"));
+  try {
+    const store = new ProjectSessionStore(dir);
+    const bridge = project("bridge", join(dir, "bridge"));
+
+    await assert.rejects(store.load("..", bridge), /Invalid userId/);
+    await assert.rejects(store.load(".", bridge), /Invalid userId/);
+    await assert.rejects(store.load("user/a", bridge), /Invalid userId/);
+    await assert.rejects(store.load("user-a", project("..", bridge.cwd)), /Invalid projectAlias/);
+    await assert.rejects(store.load("user-a", project("bad/alias", bridge.cwd)), /Invalid projectAlias/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

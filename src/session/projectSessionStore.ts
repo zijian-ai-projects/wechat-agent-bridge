@@ -8,12 +8,19 @@ import type { ProjectSession, ProjectSessionDefaults } from "./types.js";
 
 const DEFAULT_HISTORY_LIMIT = 100;
 
+function validateStorageSegment(value: string, label: string): void {
+  validateStorageId(value, label);
+  if (value === "." || value === "..") {
+    throw new Error(`Invalid ${label}: ${value}`);
+  }
+}
+
 export class ProjectSessionStore {
   constructor(private readonly sessionsDir = getSessionsDir()) {}
 
   async load(userId: string, project: ProjectDefinition, defaults: ProjectSessionDefaults = {}): Promise<ProjectSession> {
-    validateStorageId(userId, "userId");
-    validateStorageId(project.alias, "projectAlias");
+    validateStorageSegment(userId, "userId");
+    validateStorageSegment(project.alias, "projectAlias");
     const session =
       loadSecureJson<ProjectSession | null>(this.pathFor(userId, project.alias), null) ??
       this.freshSession(userId, project);
@@ -32,8 +39,8 @@ export class ProjectSessionStore {
   }
 
   async save(session: ProjectSession): Promise<void> {
-    validateStorageId(session.userId, "userId");
-    validateStorageId(session.projectAlias, "projectAlias");
+    validateStorageSegment(session.userId, "userId");
+    validateStorageSegment(session.projectAlias, "projectAlias");
     session.updatedAt = new Date().toISOString();
     if (session.history.length > DEFAULT_HISTORY_LIMIT) {
       session.history = session.history.slice(-DEFAULT_HISTORY_LIMIT);
@@ -79,8 +86,8 @@ export class ProjectSessionStore {
   }
 
   private pathFor(userId: string, projectAlias: string): string {
-    validateStorageId(userId, "userId");
-    validateStorageId(projectAlias, "projectAlias");
+    validateStorageSegment(userId, "userId");
+    validateStorageSegment(projectAlias, "projectAlias");
     return join(this.sessionsDir, userId, `${projectAlias}.json`);
   }
 }
