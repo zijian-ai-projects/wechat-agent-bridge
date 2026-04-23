@@ -7,6 +7,8 @@ Other Languages:
 
 wechat-agent-bridge es un bridge local personal. Escucha mensajes privados de una cuenta de WeChat vinculada, envía los mensajes normales a un coding agent local y devuelve el progreso y el resultado final a WeChat.
 
+Ahora también soporta aliases de proyecto explícitos y sesiones multi‑proyecto. Puedes conectar repos locales como `bridge` y `SageTalk` al mismo bridge de WeChat y mantener por separado el session, history, mode y model de Codex para cada proyecto.
+
 No es un bot público ni un servicio compartido para equipos. v1 usa Codex CLI como backend por defecto y sirve solo a un usuario de WeChat vinculado junto con el estado de sesión local de Codex del usuario actual del sistema operativo.
 
 ## Ejemplo
@@ -33,6 +35,14 @@ Revisa por qué fallan los tests de este repo y sugiere una corrección.
 ```
 
 El bridge envía ese mensaje como prompt al Codex CLI local. El progreso de Codex se sincroniza con WeChat según el intervalo configurado, y la respuesta final vuelve al mismo chat privado.
+
+Si quieres enviar solo un mensaje a un proyecto concreto, puedes escribir:
+
+```text
+@SageTalk run tests and summarize failures
+```
+
+Ese mensaje se enruta solo al proyecto `SageTalk` y no cambia el proyecto activo actual.
 
 ## Instalación y Ejecución
 
@@ -95,14 +105,45 @@ La configuración, la cuenta, las sesiones y los sync buffers se escriben con pe
 Puedes enviarlos en el chat privado de WeChat vinculado:
 
 - `/help`
-- `/clear`
-- `/status`
+- `/project [alias]`
+- `/interrupt [project]`
+- `/replace [project] <prompt>`
+- `/clear [project]`
+- `/status [project]`
 - `/cwd [path]`
-- `/model [name]`
-- `/mode [readonly|workspace|yolo]`
-- `/history [n]`
+- `/model [project] [name]`
+- `/mode [project] [readonly|workspace|yolo]`
+- `/history [project] [n]`
 
 `/clear` descarta el antiguo Codex session/thread id, de modo que el siguiente mensaje normal empieza una conversación nueva. Si no se usa `/clear`, los mensajes siguientes prefieren `codex exec resume <SESSION_ID>`.
+
+## Sesiones Multi‑Proyecto
+
+`~/.wechat-agent-bridge/config.json` puede definir aliases de proyecto de forma explícita:
+
+```json
+{
+  "defaultProject": "bridge",
+  "projects": {
+    "bridge": { "cwd": "/Users/you/.codex/projects/wechat-agent-bridge" },
+    "SageTalk": { "cwd": "/Users/you/.codex/projects/SageTalk" }
+  },
+  "extraWritableRoots": [
+    "/Users/you/.codex/projects"
+  ],
+  "streamIntervalMs": 10000
+}
+```
+
+En WeChat:
+
+- `/project` muestra la lista de proyectos configurados y el proyecto activo actual.
+- `/project SageTalk` cambia el proyecto activo a `SageTalk`.
+- `@SageTalk revisa por qué fallan los tests` envía solo ese mensaje a `SageTalk`.
+- `/interrupt SageTalk` interrumpe la tarea actual de `SageTalk`.
+- `/replace SageTalk vuelve a implementarlo siguiendo este plan` interrumpe y reemplaza la tarea actual de `SageTalk`.
+
+Cada proyecto mantiene su propio Codex session, history, mode y model. Distintos proyectos pueden ejecutarse en paralelo. Los mensajes nuevos para el mismo proyecto se rechazan mientras siga ocupado, salvo que uses explícitamente `/interrupt` o `/replace`.
 
 ## Modos de Codex
 
