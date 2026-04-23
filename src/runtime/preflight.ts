@@ -1,8 +1,8 @@
 import { checkCodexInstalled } from "./codexAvailability.js";
 import { assertCodexLoggedIn, checkCodexFileAuthPermissions, checkCodexLoginStatus, type CodexLoginStatus } from "../config/codexAuth.js";
-import { assertCwdPreflight } from "../config/git.js";
 import type { BridgeConfig } from "../config/config.js";
 import type { CodexCheckResult } from "./codexAvailability.js";
+import { resolveProjectRegistry } from "../config/projects.js";
 import { realpath } from "node:fs/promises";
 
 export interface PreflightResult {
@@ -34,7 +34,8 @@ export async function runPreflightWithChecks(
 
   const login = assertCodexLoggedIn(checks.checkCodexLoginStatus());
   checks.checkCodexFileAuthPermissions();
-  const cwd = await assertCwdPreflight(config.defaultCwd, config.allowlistRoots);
+  const registry = await resolveProjectRegistry(config);
+  const cwd = registry.defaultProject.cwd;
   await Promise.all((config.extraWritableRoots ?? []).map((root) => realpath(root)));
 
   return { codexVersion: codex.version, login, cwd };

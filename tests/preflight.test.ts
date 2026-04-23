@@ -19,7 +19,16 @@ test("preflight allows daemon start when codex login status is ChatGPT", async (
   const repo = await makeGitRepo();
 
   const result = await runPreflightWithChecks(
-    { defaultCwd: repo, allowlistRoots: [repo], extraWritableRoots: [], streamIntervalMs: 1 },
+    {
+      defaultCwd: repo,
+      allowlistRoots: [repo],
+      defaultProject: "repo",
+      projects: {
+        repo: { cwd: repo },
+      },
+      extraWritableRoots: [],
+      streamIntervalMs: 1,
+    },
     {
       checkCodexInstalled: () => ({ ok: true, version: "codex 1.0.0" }),
       checkCodexLoginStatus: () => ({ state: "chatgpt", message: "Logged in using ChatGPT" }),
@@ -36,7 +45,16 @@ test("preflight returns clear login guidance when codex is not logged in", async
 
   await assert.rejects(
     runPreflightWithChecks(
-      { defaultCwd: repo, allowlistRoots: [repo], extraWritableRoots: [], streamIntervalMs: 1 },
+      {
+        defaultCwd: repo,
+        allowlistRoots: [repo],
+        defaultProject: "repo",
+        projects: {
+          repo: { cwd: repo },
+        },
+        extraWritableRoots: [],
+        streamIntervalMs: 1,
+      },
       {
         checkCodexInstalled: () => ({ ok: true, version: "codex 1.0.0" }),
         checkCodexLoginStatus: () => ({ state: "logged-out", message: "Not logged in" }),
