@@ -136,10 +136,10 @@ export async function handleModel(ctx: CommandContext, args: string): Promise<Co
     return handleProjectModel(ctx.projectManager, args);
   }
   const session = requireSession(ctx);
-  if (args.length === 0) {
+  if (!args.trim()) {
     return { handled: true, reply: `当前模型: ${session.model ?? "Codex 默认"}\n用法: /model <name>` };
   }
-  session.model = args.trim() || undefined;
+  session.model = args.trim();
   return { handled: true, reply: `模型已切换为: ${session.model ?? "Codex 默认"}` };
 }
 
@@ -259,6 +259,23 @@ function splitProjectArg(manager: CommandProjectManager, args: string): { alias?
   return { rest: trimmedStart, first, afterFirst };
 }
 
+function splitProjectPositionArg(
+  manager: CommandProjectManager,
+  args: string,
+): { alias?: string; rest: string; unknownAlias?: string } {
+  const trimmedStart = args.trimStart();
+  const match = /^(\S+)([\s\S]*)$/.exec(trimmedStart);
+  if (!match) return { rest: "" };
+  const [, first, afterFirst] = match;
+  if (hasProject(manager, first)) {
+    return { alias: first, rest: afterFirst };
+  }
+  if (afterFirst.trim()) {
+    return { unknownAlias: first, rest: afterFirst };
+  }
+  return { rest: trimmedStart };
+}
+
 async function handleProjectCwd(manager: CommandProjectManager, args: string): Promise<CommandResult> {
   const input = args.trim();
   if (!input) {
@@ -293,11 +310,11 @@ async function handleProjectCwd(manager: CommandProjectManager, args: string): P
 }
 
 async function handleProjectModel(manager: CommandProjectManager, args: string): Promise<CommandResult> {
-  const parsed = splitProjectArg(manager, args);
+  const parsed = splitProjectPositionArg(manager, args);
+  if (parsed.unknownAlias) return unknownProject(parsed.unknownAlias, manager);
   const alias = parsed.alias;
-  const modelArg = alias ? parsed.afterFirst : args;
-  const hasModelArg = alias ? parsed.afterFirst.length > 0 : args.length > 0;
-  if (!hasModelArg) {
+  const modelArg = alias ? parsed.rest : args;
+  if (!modelArg.trim()) {
     const session = await manager.session(alias);
     return {
       handled: true,
@@ -309,7 +326,8 @@ async function handleProjectModel(manager: CommandProjectManager, args: string):
 }
 
 async function handleProjectMode(manager: CommandProjectManager, args: string): Promise<CommandResult> {
-  const parsed = splitProjectArg(manager, args);
+  const parsed = splitProjectPositionArg(manager, args);
+  if (parsed.unknownAlias) return unknownProject(parsed.unknownAlias, manager);
   const alias = parsed.alias;
   const modeArg = (alias ? parsed.rest : args).trim();
   if (!modeArg) {
@@ -346,7 +364,8 @@ async function handleProjectStatus(ctx: CommandContext, args: string): Promise<C
 }
 
 async function handleProjectHistory(manager: CommandProjectManager, args: string): Promise<CommandResult> {
-  const parsed = splitProjectArg(manager, args);
+  const parsed = splitProjectPositionArg(manager, args);
+  if (parsed.unknownAlias) return unknownProject(parsed.unknownAlias, manager);
   const alias = parsed.alias;
   const limitText = (alias ? parsed.rest : args).trim();
   const limit = limitText ? Number.parseInt(limitText, 10) : 20;

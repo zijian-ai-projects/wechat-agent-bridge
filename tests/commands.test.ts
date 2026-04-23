@@ -128,6 +128,27 @@ test("/mode switches among safe modes and requires explicit yolo", async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+test("legacy /model only changes on a non-empty model name", async () => {
+  const root = await realpath(mkdtempSync(join(tmpdir(), "wcb-cmd-")));
+  const session = createSession(root);
+  session.model = "existing-model";
+
+  const noArg = await routeCommand({ text: "/model", session, boundUserId: "user-1" });
+  const whitespace = await routeCommand({ text: "/model     ", session, boundUserId: "user-1" });
+
+  assert.equal(noArg.handled, true);
+  assert.match(noArg.reply ?? "", /existing-model/);
+  assert.equal(whitespace.handled, true);
+  assert.match(whitespace.reply ?? "", /existing-model/);
+  assert.equal(session.model, "existing-model");
+
+  const set = await routeCommand({ text: "/model gpt-5", session, boundUserId: "user-1" });
+  assert.equal(set.handled, true);
+  assert.equal(session.model, "gpt-5");
+
+  await rm(root, { recursive: true, force: true });
+});
+
 test("/cwd only switches into allowlist roots", async () => {
   const root = await realpath(mkdtempSync(join(tmpdir(), "wcb-cmd-")));
   mkdirSync(join(root, ".git"));
@@ -288,7 +309,7 @@ test("project-aware /mode shows active mode and mutates only targeted projects",
   assert.match(invalid.reply ?? "", /未知模式/);
 });
 
-test("project-aware /model shows active model and clears only when an argument is provided", async () => {
+test("project-aware /model changes only when a non-empty model name is provided", async () => {
   const projectManager = new FakeProjectManager();
   await projectManager.setModel("SageTalk", "sage-model");
 
@@ -299,9 +320,9 @@ test("project-aware /model shows active model and clears only when an argument i
   assert.match(show.reply ?? "", /sage-model/);
   assert.equal((await projectManager.session("SageTalk")).model, "gpt-5.4-codex");
   assert.match(set.reply ?? "", /gpt-5.4-codex/);
-  const clear = await routeCommand({ text: "/model SageTalk     ", projectManager, boundUserId: "user-1" });
-  assert.equal((await projectManager.session("SageTalk")).model, undefined);
-  assert.match(clear.reply ?? "", /Codex 默认/);
+  const whitespace = await routeCommand({ text: "/model SageTalk     ", projectManager, boundUserId: "user-1" });
+  assert.equal((await projectManager.session("SageTalk")).model, "gpt-5.4-codex");
+  assert.match(whitespace.reply ?? "", /gpt-5.4-codex/);
 });
 
 test("project-aware /clear clears the targeted project", async () => {
@@ -320,7 +341,15 @@ test("project-aware /clear clears the targeted project", async () => {
 test("project-aware commands reply clearly for unknown explicit project aliases", async () => {
   const projectManager = new FakeProjectManager();
 
-  for (const text of ["/project Missing", "/interrupt Missing", "/status Missing", "/clear Missing"]) {
+  for (const text of [
+    "/project Missing",
+    "/interrupt Missing",
+    "/status Missing",
+    "/clear Missing",
+    "/mode Missing workspace",
+    "/model Missing gpt-5",
+    "/history Missing 2",
+  ]) {
     const result = await routeCommand({ text, projectManager, boundUserId: "user-1" });
     assert.equal(result.handled, true);
     assert.match(result.reply ?? "", /未知项目: Missing/);
