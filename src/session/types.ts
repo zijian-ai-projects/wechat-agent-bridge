@@ -22,8 +22,16 @@ export interface BridgeSession {
   updatedAt: string;
 }
 
+export interface ProjectSession extends BridgeSession {
+  projectAlias: string;
+}
+
 export interface SessionDefaults {
   cwd: string;
   allowlistRoots: string[];
+  resetStaleProcessing?: boolean;
+}
+
+export interface ProjectSessionDefaults {
   resetStaleProcessing?: boolean;
 }
