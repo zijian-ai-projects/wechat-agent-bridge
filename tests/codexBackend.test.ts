@@ -26,6 +26,30 @@ setTimeout(() => process.exit(2), 5000);
   return { dir, bin };
 }
 
+async function createOverlapFakeCodex(prefix: string): Promise<{ dir: string; bin: string }> {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const bin = join(dir, "fake-codex-overlap.mjs");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const prompt = process.argv.at(-1);
+process.stdout.write(JSON.stringify({ type: "turn.started", text: prompt }) + "\\n");
+process.on("SIGINT", () => {
+  process.stderr.write("x".repeat(16 * 1024 * 1024));
+  process.exit(0);
+});
+if (prompt === "new") {
+  setTimeout(() => process.exit(0), 300);
+} else {
+  setInterval(() => {}, 1000);
+}
+`,
+    { mode: 0o700 },
+  );
+  await chmod(bin, 0o700);
+  return { dir, bin };
+}
+
 test("buildCodexExecArgs maps modes to Codex sandbox flags", () => {
   assert.deepEqual(
     buildCodexExecArgs({ prompt: "hi", cwd: "/tmp/project", mode: "readonly" }),
@@ -133,6 +157,58 @@ test("CodexExecBackend falls back to user id for legacy interrupts", async () =>
   const result = await turn;
 
   assert.equal(result.interrupted, true);
+});
+
+test("CodexExecBackend stale close cleanup does not delete a newer child for the same execution key", async () => {
+  const { dir, bin } = await createOverlapFakeCodex("wcb-codex-overlap-");
+  const backend = new CodexExecBackend(bin);
+  const executionKey = "user-1:bridge";
+  const children = (backend as unknown as { children: Map<string, unknown> }).children;
+  let oldStarted = false;
+  let newStarted = false;
+
+  const oldTurn = backend.startTurn(
+    {
+      userId: "user-1",
+      executionKey,
+      prompt: "old",
+      cwd: dir,
+      mode: "readonly",
+    },
+    {
+      onEvent: (event) => {
+        if ((event as { type?: string }).type === "turn.started") oldStarted = true;
+      },
+    },
+  );
+
+  await waitFor(() => oldStarted);
+  await backend.interrupt(executionKey);
+
+  const newTurn = backend.startTurn(
+    {
+      userId: "user-1",
+      executionKey,
+      prompt: "new",
+      cwd: dir,
+      mode: "readonly",
+    },
+    {
+      onEvent: (event) => {
+        if ((event as { type?: string; text?: string }).type === "turn.started" && (event as { text?: string }).text === "new") {
+          newStarted = true;
+        }
+      },
+    },
+  );
+
+  await waitFor(() => newStarted);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(children.has(executionKey), true);
+
+  await oldTurn;
+  await newTurn;
 });
 
 test("formatCodexEventForWechat summarizes key JSONL events", () => {

@@ -163,7 +163,7 @@ export class CodexExecBackend implements AgentBackend {
     const child = this.children.get(executionKey);
     if (!child) return;
     await interruptChildProcess(child, this.interruptTimeoutMs);
-    this.children.delete(executionKey);
+    if (this.children.get(executionKey) === child) this.children.delete(executionKey);
   }
 
   formatEventForWechat(event: unknown): string | undefined {
@@ -220,7 +220,7 @@ export class CodexExecBackend implements AgentBackend {
 
     return new Promise((resolve, reject) => {
       child.on("close", (code, signal) => {
-        this.children.delete(executionKey);
+        if (this.children.get(executionKey) === child) this.children.delete(executionKey);
         if (signal === "SIGTERM" || signal === "SIGINT" || signal === "SIGKILL") interrupted = true;
         if (code && !interrupted) {
           reject(new Error(`codex exited with code ${code}: ${stderr.trim()}`));
