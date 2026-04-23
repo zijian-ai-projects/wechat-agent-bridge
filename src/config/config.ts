@@ -22,9 +22,7 @@ type BridgeConfigInput = Pick<BridgeConfig, "defaultCwd" | "allowlistRoots" | "e
 
 function normalizeProjects(config: BridgeConfigInput): Pick<BridgeConfig, "defaultProject" | "projects"> {
   if (config.projects && Object.keys(config.projects).length > 0) {
-    const defaultProject = config.defaultProject && config.projects[config.defaultProject]
-      ? config.defaultProject
-      : Object.keys(config.projects)[0];
+    const defaultProject = config.defaultProject ?? Object.keys(config.projects)[0];
     return {
       defaultProject,
       projects: config.projects,

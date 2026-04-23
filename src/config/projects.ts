@@ -1,7 +1,8 @@
 import { realpath } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, isAbsolute, normalize, resolve } from "node:path";
 
 import { assertGitRepo } from "./git.js";
+import { expandHome } from "./security.js";
 import type { ProjectConfigEntry } from "./config.js";
 
 const PROJECT_ALIAS_RE = /^[A-Za-z0-9_-]+$/;
@@ -58,10 +59,11 @@ export function createLegacyProjects(defaultCwd: string, allowlistRoots: string[
   const roots = allowlistRoots.length > 0 ? allowlistRoots : [defaultCwd];
   const projects: Record<string, ProjectConfigEntry> = {};
   for (const root of roots) {
-    let alias = basename(root) || "default";
+    const baseAlias = sanitizeLegacyProjectAlias(basename(root));
+    let alias = baseAlias;
     let suffix = 2;
     while (projects[alias]) {
-      alias = `${basename(root) || "default"}-${suffix}`;
+      alias = `${baseAlias}-${suffix}`;
       suffix += 1;
     }
     projects[alias] = { cwd: root };
@@ -79,7 +81,7 @@ export async function resolveProjectRegistry(config: ProjectConfigShape): Promis
   const seenCwds = new Map<string, string>();
   for (const [alias, project] of entries) {
     validateProjectAlias(alias);
-    const cwd = await realpath(project.cwd);
+    const cwd = await resolveProjectCwd(project.cwd);
     const gitRoot = await assertGitRepo(cwd);
     if (gitRoot !== cwd) {
       throw new Error(`Project ${alias} cwd must be a Git repo root: ${cwd}`);
@@ -99,4 +101,15 @@ export async function resolveProjectRegistry(config: ProjectConfigShape): Promis
   }
 
   return new ProjectRegistry(defaultAlias, projectsByAlias);
+}
+
+function sanitizeLegacyProjectAlias(input: string): string {
+  const alias = input.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return alias || "project";
+}
+
+async function resolveProjectCwd(inputPath: string): Promise<string> {
+  const expanded = expandHome(inputPath.trim());
+  const absolute = isAbsolute(expanded) ? normalize(expanded) : resolve(process.cwd(), expanded);
+  return realpath(absolute);
 }

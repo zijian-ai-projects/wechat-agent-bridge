@@ -5,6 +5,9 @@ import { basename, join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { loadConfig } from "../src/config/config.js";
+import { getConfigPath } from "../src/config/paths.js";
+import { saveSecureJson } from "../src/config/secureStore.js";
 import { createLegacyProjects, resolveProjectRegistry, validateProjectAlias } from "../src/config/projects.js";
 
 async function makeGitRepo(prefix: string): Promise<string> {
@@ -14,6 +17,30 @@ async function makeGitRepo(prefix: string): Promise<string> {
   return dir;
 }
 
+async function makeGitRepoTree(prefix: string): Promise<{ root: string; repo: string }> {
+  const root = await realpath(mkdtempSync(join(tmpdir(), prefix)));
+  const repo = join(root, "repo");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  await writeFile(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+  return { root, repo };
+}
+
+async function withTempConfigHome<T>(body: (home: string) => Promise<T>): Promise<T> {
+  const previousHome = process.env.WECHAT_AGENT_BRIDGE_HOME;
+  const home = await realpath(mkdtempSync(join(tmpdir(), "wcb-config-")));
+  process.env.WECHAT_AGENT_BRIDGE_HOME = home;
+  try {
+    return await body(home);
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.WECHAT_AGENT_BRIDGE_HOME;
+    } else {
+      process.env.WECHAT_AGENT_BRIDGE_HOME = previousHome;
+    }
+    await rm(home, { recursive: true, force: true });
+  }
+}
+
 test("validateProjectAlias accepts safe aliases and rejects path-like aliases", () => {
   assert.equal(validateProjectAlias("SageTalk"), "SageTalk");
   assert.equal(validateProjectAlias("bridge-main"), "bridge-main");
@@ -21,24 +48,42 @@ test("validateProjectAlias accepts safe aliases and rejects path-like aliases", 
   assert.throws(() => validateProjectAlias("bad name"), /Invalid project alias/);
 });
 
-test("resolveProjectRegistry validates explicit projects and default project", async () => {
-  const bridge = await makeGitRepo("wcb-bridge-");
-  const sage = await makeGitRepo("wcb-sage-");
+test("loadConfig preserves an explicit defaultProject even when it is invalid", async () => {
+  await withTempConfigHome(async () => {
+    const bridge = await makeGitRepo("wcb-bridge-");
+    try {
+      saveSecureJson(getConfigPath(), {
+        defaultCwd: bridge,
+        allowlistRoots: [bridge],
+        defaultProject: "missing",
+        projects: {
+          bridge: { cwd: bridge },
+        },
+        extraWritableRoots: [],
+        streamIntervalMs: 1,
+      });
 
-  const registry = await resolveProjectRegistry({
-    defaultProject: "bridge",
-    projects: {
-      bridge: { cwd: bridge },
-      SageTalk: { cwd: sage },
-    },
+      const config = loadConfig();
+      assert.equal(config.defaultProject, "missing");
+      await assert.rejects(resolveProjectRegistry(config), /Default project does not exist: missing/);
+    } finally {
+      await rm(bridge, { recursive: true, force: true });
+    }
   });
+});
 
-  assert.equal(registry.defaultProject.alias, "bridge");
-  assert.equal(registry.get("SageTalk").cwd, sage);
-  assert.equal(registry.findByCwd(sage)?.alias, "SageTalk");
+test("createLegacyProjects sanitizes legacy aliases and resolves collisions", () => {
+  const projects = createLegacyProjects("/tmp/wechat-agent-bridge", [
+    "/tmp/foo.bar",
+    "/tmp/foo bar",
+    "/tmp/.config",
+    "/tmp/项目",
+  ]);
 
-  await rm(bridge, { recursive: true, force: true });
-  await rm(sage, { recursive: true, force: true });
+  assert.equal(projects.projects["foo-bar"].cwd, "/tmp/foo.bar");
+  assert.equal(projects.projects["foo-bar-2"].cwd, "/tmp/foo bar");
+  assert.equal(projects.projects.config.cwd, "/tmp/.config");
+  assert.equal(projects.projects.project.cwd, "/tmp/项目");
 });
 
 test("createLegacyProjects derives aliases from allowlist roots", () => {
@@ -47,4 +92,85 @@ test("createLegacyProjects derives aliases from allowlist roots", () => {
   assert.equal(projects.defaultProject, basename("/tmp/wechat-agent-bridge"));
   assert.equal(projects.projects["wechat-agent-bridge"].cwd, "/tmp/wechat-agent-bridge");
   assert.equal(projects.projects.SageTalk.cwd, "/tmp/SageTalk");
+});
+
+test("resolveProjectRegistry canonicalizes whitespace and relative cwd values", async () => {
+  const { root, repo } = await makeGitRepoTree("wcb-tree-");
+  const previousCwd = process.cwd();
+  process.chdir(root);
+  try {
+    const registry = await resolveProjectRegistry({
+      defaultProject: "repo",
+      projects: {
+        repo: { cwd: "  ./repo  " },
+      },
+    });
+
+    assert.equal(registry.defaultProject.cwd, repo);
+  } finally {
+    process.chdir(previousCwd);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveProjectRegistry rejects duplicate realpaths", async () => {
+  const bridge = await makeGitRepo("wcb-bridge-");
+  const alias = await makeGitRepo("wcb-alias-");
+
+  try {
+    await assert.rejects(
+      resolveProjectRegistry({
+        defaultProject: "bridge",
+        projects: {
+          bridge: { cwd: join(bridge, "nested", "..") },
+          alias: { cwd: bridge },
+        },
+      }),
+      /resolve to the same cwd/,
+    );
+  } finally {
+    await rm(bridge, { recursive: true, force: true });
+    await rm(alias, { recursive: true, force: true });
+  }
+});
+
+test("resolveProjectRegistry rejects missing, non-root, and nonexistent project cwd values", async () => {
+  const bridge = await makeGitRepo("wcb-bridge-");
+  const nested = join(bridge, "nested");
+  mkdirSync(nested, { recursive: true });
+
+  try {
+    await assert.rejects(
+      resolveProjectRegistry({
+        defaultProject: "bridge",
+        projects: {
+          bridge: { cwd: bridge },
+          nested: { cwd: nested },
+        },
+      }),
+      /must be a Git repo root/,
+    );
+
+    await assert.rejects(
+      resolveProjectRegistry({
+        defaultProject: "missing",
+        projects: {
+          bridge: { cwd: bridge },
+        },
+      }),
+      /Default project does not exist: missing/,
+    );
+
+    await assert.rejects(
+      resolveProjectRegistry({
+        defaultProject: "bridge",
+        projects: {
+          bridge: { cwd: join(bridge, "does-not-exist") },
+        },
+      }),
+      /ENOENT|no such file/i,
+    );
+  } finally {
+    await rm(bridge, { recursive: true, force: true });
+  }
 });
