@@ -4,9 +4,10 @@ import { CodexExecBackend } from "../backend/CodexExecBackend.js";
 import type { AgentBackend } from "../backend/AgentBackend.js";
 import { loadLatestAccount, type AccountData } from "../config/accounts.js";
 import { loadConfig } from "../config/config.js";
+import { ProjectRegistry, resolveProjectRegistry, type ProjectDefinition } from "../config/projects.js";
 import { logger } from "../logging/logger.js";
-import { FileSessionStore } from "../session/sessionStore.js";
-import type { BridgeSession } from "../session/types.js";
+import { ProjectSessionStore } from "../session/projectSessionStore.js";
+import type { BridgeSession, ProjectSession } from "../session/types.js";
 import { WeChatApi } from "../wechat/api.js";
 import { WeChatMonitor } from "../wechat/monitor.js";
 import { createWechatSender, type WeChatSender } from "../wechat/sender.js";
@@ -14,6 +15,7 @@ import type { WeixinMessage } from "../wechat/types.js";
 import { runPreflight } from "./preflight.js";
 import { AgentService } from "../core/AgentService.js";
 import { BridgeService } from "../core/BridgeService.js";
+import { ProjectRuntimeManager } from "../core/ProjectRuntimeManager.js";
 import type { SessionStorePort } from "../core/types.js";
 
 export async function runBridge(backend: AgentBackend = new CodexExecBackend()): Promise<void> {
@@ -24,27 +26,26 @@ export async function runBridge(backend: AgentBackend = new CodexExecBackend()):
   if (!account) {
     throw new Error("未找到微信账号，请先运行 npm run setup");
   }
-  const defaultCwd = await realpath(config.defaultCwd);
-  const allowlistRoots = await Promise.all(config.allowlistRoots.map((root) => realpath(root)));
+  const registry = await resolveProjectRegistry(config);
   const extraWritableRoots = await Promise.all(config.extraWritableRoots.map((root) => realpath(root)));
-  const sessionStore = new FileSessionStore();
-  const session = await sessionStore.load(account.boundUserId, {
-    cwd: defaultCwd,
-    allowlistRoots,
-    resetStaleProcessing: true,
-  });
-  await sessionStore.save(session);
+  const projectSessionStore = new ProjectSessionStore();
+  const agentService = new AgentService(backend);
 
   const api = new WeChatApi(account.botToken, account.baseUrl);
   const sender = createWechatSender(api, account.accountId);
-  const bridgeService = new BridgeService({
+  const projectManager = new ProjectRuntimeManager({
     account,
-    session,
-    sessionStore,
+    registry,
+    sessionStore: projectSessionStore,
     sender,
-    agentService: new AgentService(backend),
+    agentService,
     streamIntervalMs: config.streamIntervalMs,
     extraWritableRoots,
+  });
+  const bridgeService = new BridgeService({
+    account,
+    projectManager,
+    sender,
   });
   const monitor = new WeChatMonitor(api, {
     onMessage: (message) => bridgeService.handleMessage(message),
@@ -56,7 +57,7 @@ export async function runBridge(backend: AgentBackend = new CodexExecBackend()):
 
   const shutdown = async () => {
     monitor.stop();
-    await backend.interrupt(account.boundUserId);
+    await projectManager.interruptAll();
     process.exit(0);
   };
   process.once("SIGINT", () => void shutdown());
@@ -77,16 +78,62 @@ async function handleMessageForTestCompat(
   streamIntervalMs: number,
   extraWritableRoots: string[] = [],
 ): Promise<void> {
-  const service = new BridgeService({
+  const registry = new ProjectRegistry("default", new Map([["default", { alias: "default", cwd: session.cwd }]]));
+  const projectSessionStore = createCompatProjectSessionStore(session, sessionStore);
+  const projectManager = new ProjectRuntimeManager({
     account,
-    session,
-    sessionStore,
+    registry,
+    sessionStore: projectSessionStore,
     sender,
     agentService: new AgentService(backend),
     streamIntervalMs,
     extraWritableRoots,
   });
+  const service = new BridgeService({
+    account,
+    projectManager,
+    sender,
+  });
   await service.handleMessage(message);
 }
 
 export const handleMessageForTest = handleMessageForTestCompat;
+
+function createCompatProjectSessionStore(session: BridgeSession, store: SessionStorePort): ProjectSessionStore {
+  return {
+    async load(userId: string, project: ProjectDefinition): Promise<ProjectSession> {
+      session.userId = userId;
+      session.cwd = project.cwd;
+      session.allowlistRoots = [project.cwd];
+      return Object.assign(session, { projectAlias: project.alias });
+    },
+
+    async save(projectSession: ProjectSession): Promise<void> {
+      Object.assign(session, projectSession);
+      await store.save(session);
+    },
+
+    async clear(userId: string, project: ProjectDefinition): Promise<ProjectSession> {
+      const next = await store.clear(userId, { cwd: project.cwd, allowlistRoots: [project.cwd] });
+      Object.assign(session, next, {
+        userId,
+        projectAlias: project.alias,
+        cwd: project.cwd,
+        state: "idle",
+        codexSessionId: undefined,
+        codexThreadId: undefined,
+        activeTurnId: undefined,
+        allowlistRoots: [project.cwd],
+      });
+      return session as ProjectSession;
+    },
+
+    addHistory(projectSession: ProjectSession, role: "user" | "assistant", content: string): void {
+      store.addHistory(projectSession, role, content);
+    },
+
+    formatHistory(projectSession: ProjectSession, limit?: number): string {
+      return store.formatHistory(projectSession, limit);
+    },
+  } as ProjectSessionStore;
+}

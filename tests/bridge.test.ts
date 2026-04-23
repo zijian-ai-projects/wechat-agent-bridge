@@ -105,19 +105,31 @@ test("handleMessage ignores stranger and group messages", async () => {
   assert.equal(sender.messages.length, 0);
 });
 
-test("new ordinary message interrupts old processing turn before starting new turn", async () => {
+test("ordinary messages preserve leading whitespace through the compat project manager", async () => {
+  const backend = new FakeBackend();
+  const sender = new FakeSender();
+  const session = makeSession({ codexSessionId: undefined, codexThreadId: undefined });
+
+  await handleMessageForTest(textMessage("user-1", "  keep literal spacing"), account, session, new FakeSessionStore(), sender, backend, 1);
+
+  assert.equal(backend.startRequests.length, 1);
+  assert.equal(backend.startRequests[0]?.prompt, "  keep literal spacing");
+});
+
+test("new ordinary message rejects same-project busy turn without interrupting it", async () => {
   const backend = new FakeBackend();
   const sender = new FakeSender();
   const session = makeSession({ state: "processing" });
 
   await handleMessageForTest(textMessage("user-1", "new task"), account, session, new FakeSessionStore(), sender, backend, 1);
 
-  assert.deepEqual(backend.interrupts, ["user-1"]);
-  assert.equal(backend.resumeRequests.length, 1);
-  assert.match(sender.messages[0] ?? "", /中断上一轮/);
+  assert.deepEqual(backend.interrupts, []);
+  assert.equal(backend.startRequests.length, 0);
+  assert.equal(backend.resumeRequests.length, 0);
+  assert.match(sender.messages[0] ?? "", /正在处理上一轮任务/);
 });
 
-test("/clear discards old session id and does not resume old session", async () => {
+test("/clear clears the default project session and does not resume old session", async () => {
   const backend = new FakeBackend();
   const sender = new FakeSender();
   const session = makeSession({ codexSessionId: "old-session", codexThreadId: "old-session" });
@@ -128,5 +140,5 @@ test("/clear discards old session id and does not resume old session", async () 
   assert.equal(session.codexSessionId, undefined);
   assert.equal(session.codexThreadId, undefined);
   assert.equal(backend.resumeRequests.length, 0);
-  assert.match(sender.messages.join("\n"), /会话已清除/);
+  assert.match(sender.messages.join("\n"), /项目 default 会话已清除/);
 });

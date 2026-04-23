@@ -9,8 +9,11 @@ import type { AgentBackend, AgentTurnRequest, AgentTurnResult } from "../src/bac
 import { AgentService } from "../src/core/AgentService.js";
 import { BridgeService } from "../src/core/BridgeService.js";
 import { ModeService } from "../src/core/ModeService.js";
+import { ProjectRuntimeManager } from "../src/core/ProjectRuntimeManager.js";
 import { SessionService } from "../src/core/SessionService.js";
 import type { AccountData } from "../src/config/accounts.js";
+import { ProjectRegistry, type ProjectDefinition } from "../src/config/projects.js";
+import type { ProjectSessionStore } from "../src/session/projectSessionStore.js";
 import type { BridgeSession } from "../src/session/types.js";
 import { MessageItemType, MessageType, type WeixinMessage } from "../src/wechat/types.js";
 
@@ -19,6 +22,7 @@ class FakeBackend implements AgentBackend {
   startRequests: AgentTurnRequest[] = [];
   resumeRequests: AgentTurnRequest[] = [];
   results: AgentTurnResult[];
+  release?: () => void;
 
   constructor(results: AgentTurnResult[] = [{ text: "ok", interrupted: false, codexSessionId: "new-session" }]) {
     this.results = results;
@@ -26,11 +30,21 @@ class FakeBackend implements AgentBackend {
 
   async startTurn(request: AgentTurnRequest): Promise<AgentTurnResult> {
     this.startRequests.push(request);
+    if (this.results.length === 0) {
+      await new Promise<void>((resolve) => {
+        this.release = resolve;
+      });
+    }
     return this.results.shift() ?? { text: "ok", interrupted: false, codexSessionId: "new-session" };
   }
 
   async resumeTurn(request: AgentTurnRequest): Promise<AgentTurnResult> {
     this.resumeRequests.push(request);
+    if (this.results.length === 0) {
+      await new Promise<void>((resolve) => {
+        this.release = resolve;
+      });
+    }
     return this.results.shift() ?? { text: "ok", interrupted: false, codexSessionId: request.codexSessionId };
   }
 
@@ -63,11 +77,101 @@ class MemorySessionStore {
   }
 }
 
+class MemoryProjectSessionStore {
+  readonly sessions = new Map<string, BridgeSession & { projectAlias: string }>();
+
+  async load(userId: string, project: ProjectDefinition, defaults: { resetStaleProcessing?: boolean } = {}): Promise<BridgeSession & { projectAlias: string }> {
+    const key = `${userId}:${project.alias}`;
+    let session = this.sessions.get(key);
+    if (!session) {
+      session = { ...makeSession({ userId, cwd: project.cwd, allowlistRoots: [project.cwd], codexSessionId: undefined }), projectAlias: project.alias };
+      this.sessions.set(key, session);
+    }
+    session.userId = userId;
+    session.projectAlias = project.alias;
+    session.cwd = project.cwd;
+    session.allowlistRoots = [project.cwd];
+    if (defaults.resetStaleProcessing && session.state !== "idle") {
+      session.state = "idle";
+      session.activeTurnId = undefined;
+    }
+    return session;
+  }
+
+  async save(session: BridgeSession & { projectAlias: string }): Promise<void> {
+    this.sessions.set(`${session.userId}:${session.projectAlias}`, session);
+  }
+
+  async clear(userId: string, project: ProjectDefinition): Promise<BridgeSession & { projectAlias: string }> {
+    const session = { ...makeSession({ userId, cwd: project.cwd, allowlistRoots: [project.cwd], codexSessionId: undefined }), projectAlias: project.alias };
+    this.sessions.set(`${userId}:${project.alias}`, session);
+    return session;
+  }
+
+  addHistory(session: BridgeSession, role: "user" | "assistant", content: string): void {
+    session.history.push({ role, content, timestamp: new Date().toISOString() });
+  }
+
+  formatHistory(session: BridgeSession): string {
+    return `${session.history.length}`;
+  }
+}
+
 class MemorySender {
   messages: string[] = [];
+  deliveries: Array<{ toUserId: string; contextToken: string; text: string }> = [];
 
-  async sendText(_toUserId: string, _contextToken: string, text: string): Promise<void> {
+  async sendText(toUserId: string, contextToken: string, text: string): Promise<void> {
     this.messages.push(text);
+    this.deliveries.push({ toUserId, contextToken, text });
+  }
+}
+
+class FakeProjectManager {
+  activeProjectAlias = "bridge";
+  prompts: Array<{ projectAlias?: string; prompt: string; toUserId: string; contextToken: string }> = [];
+  replacements: Array<{ projectAlias?: string; prompt: string; toUserId: string; contextToken: string }> = [];
+  clears: Array<string | undefined> = [];
+
+  listProjects(): Array<{ alias: string; cwd: string; active: boolean }> {
+    return [
+      { alias: "bridge", cwd: "/tmp/bridge", active: this.activeProjectAlias === "bridge" },
+      { alias: "SageTalk", cwd: "/tmp/sage", active: this.activeProjectAlias === "SageTalk" },
+    ];
+  }
+
+  setActiveProject(alias: string): { alias: string; cwd: string } {
+    const project = this.listProjects().find((item) => item.alias === alias);
+    if (!project) throw new Error(`Unknown project: ${alias}`);
+    this.activeProjectAlias = alias;
+    return project;
+  }
+
+  async runPrompt(options: { projectAlias?: string; prompt: string; toUserId: string; contextToken: string }): Promise<void> {
+    this.prompts.push(options);
+  }
+
+  async replacePrompt(options: { projectAlias?: string; prompt: string; toUserId: string; contextToken: string }): Promise<void> {
+    this.replacements.push(options);
+  }
+
+  async interrupt(): Promise<void> {}
+
+  async clear(alias?: string): Promise<BridgeSession & { projectAlias: string }> {
+    this.clears.push(alias);
+    return { ...makeSession({ cwd: alias === "SageTalk" ? "/tmp/sage" : "/tmp/bridge" }), projectAlias: alias ?? this.activeProjectAlias };
+  }
+
+  async setMode(_alias: string | undefined, mode: string): Promise<BridgeSession & { projectAlias: string }> {
+    return { ...makeSession({ mode: mode as BridgeSession["mode"] }), projectAlias: this.activeProjectAlias };
+  }
+
+  async setModel(_alias: string | undefined, model: string | undefined): Promise<BridgeSession & { projectAlias: string }> {
+    return { ...makeSession({ model }), projectAlias: this.activeProjectAlias };
+  }
+
+  async session(alias = this.activeProjectAlias): Promise<BridgeSession & { projectAlias: string }> {
+    return { ...makeSession({ cwd: alias === "SageTalk" ? "/tmp/sage" : "/tmp/bridge" }), projectAlias: alias };
   }
 }
 
@@ -103,57 +207,95 @@ function textMessage(fromUserId: string, text: string, messageType = MessageType
   };
 }
 
-function makeBridge(session: BridgeSession, backend = new FakeBackend(), store = new MemorySessionStore(), sender = new MemorySender()): {
+function makeProjectBridge(projectManager = new FakeProjectManager(), sender = new MemorySender()): {
   bridge: BridgeService;
-  backend: FakeBackend;
+  projectManager: FakeProjectManager;
   sender: MemorySender;
 } {
-  const bridge = new BridgeService({
-    account,
-    session,
-    sessionStore: store,
-    sender,
-    agentService: new AgentService(backend),
-    streamIntervalMs: 1,
-    extraWritableRoots: ["/tmp/extra"],
-  });
-  return { bridge, backend, sender };
+  const bridge = new BridgeService({ account, projectManager, sender });
+  return { bridge, projectManager, sender };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  assert.equal(predicate(), true);
 }
 
 test("BridgeService keeps v1 message filters for strangers, groups and bot messages", async () => {
-  const session = makeSession();
-  const { bridge, backend, sender } = makeBridge(session);
+  const { bridge, projectManager, sender } = makeProjectBridge();
 
   await bridge.handleMessage(textMessage("user-2", "hi"));
   await bridge.handleMessage(textMessage("room@chatroom", "hi"));
   await bridge.handleMessage(textMessage("user-1", "hi", MessageType.BOT));
 
-  assert.equal(backend.startRequests.length, 0);
-  assert.equal(backend.resumeRequests.length, 0);
+  assert.equal(projectManager.prompts.length, 0);
+  assert.equal(projectManager.replacements.length, 0);
   assert.equal(sender.messages.length, 0);
 });
 
-test("BridgeService interrupts a processing turn before starting a new ordinary message", async () => {
-  const session = makeSession({ state: "processing" });
-  const { bridge, backend, sender } = makeBridge(session);
+test("BridgeService routes @Project prompts without changing active project", async () => {
+  const { bridge, projectManager } = makeProjectBridge();
 
-  await bridge.handleMessage(textMessage("user-1", "new task"));
+  await bridge.handleMessage(textMessage("user-1", "@SageTalk run tests"));
 
-  assert.deepEqual(backend.interrupts, ["user-1"]);
-  assert.equal(backend.resumeRequests.length, 1);
-  assert.match(sender.messages[0] ?? "", /中断上一轮/);
+  assert.equal(projectManager.activeProjectAlias, "bridge");
+  assert.deepEqual(projectManager.prompts, [{ projectAlias: "SageTalk", prompt: "run tests", toUserId: "user-1", contextToken: "ctx" }]);
 });
 
-test("BridgeService clear command discards old Codex session ids", async () => {
-  const session = makeSession({ codexSessionId: "old-session", codexThreadId: "old-session" });
-  const { bridge, backend, sender } = makeBridge(session);
+test("BridgeService routes ordinary prompts to the active project with full text", async () => {
+  const { bridge, projectManager } = makeProjectBridge();
+
+  await bridge.handleMessage(textMessage("user-1", "  keep literal spacing"));
+
+  assert.deepEqual(projectManager.prompts, [{ prompt: "  keep literal spacing", toUserId: "user-1", contextToken: "ctx" }]);
+});
+
+test("BridgeService passes WeChat routing context into replace commands", async () => {
+  const { bridge, projectManager, sender } = makeProjectBridge();
+
+  await bridge.handleMessage(textMessage("user-1", "/replace SageTalk fix tests"));
+
+  assert.deepEqual(projectManager.replacements, [
+    { projectAlias: "SageTalk", prompt: "fix tests", toUserId: "user-1", contextToken: "ctx" },
+  ]);
+  assert.match(sender.messages.join("\n"), /已替换项目 SageTalk/);
+});
+
+test("BridgeService clear command clears project session through project manager", async () => {
+  const { bridge, projectManager, sender } = makeProjectBridge();
 
   await bridge.handleMessage(textMessage("user-1", "/clear"));
 
-  assert.deepEqual(backend.interrupts, ["user-1"]);
-  assert.equal(session.codexSessionId, undefined);
-  assert.equal(session.codexThreadId, undefined);
-  assert.match(sender.messages.join("\n"), /会话已清除/);
+  assert.deepEqual(projectManager.clears, [undefined]);
+  assert.match(sender.messages.join("\n"), /项目 bridge 会话已清除/);
+});
+
+test("BridgeService rejects same-project prompt while busy", async () => {
+  const backend = new FakeBackend([]);
+  const sender = new MemorySender();
+  const manager = new ProjectRuntimeManager({
+    account,
+    registry: new ProjectRegistry("bridge", new Map([["bridge", { alias: "bridge", cwd: "/tmp/bridge" }]])),
+    sessionStore: new MemoryProjectSessionStore() as unknown as ProjectSessionStore,
+    sender,
+    agentService: new AgentService(backend),
+    streamIntervalMs: 1,
+  });
+  const bridge = new BridgeService({ account, projectManager: manager, sender });
+
+  const first = bridge.handleMessage(textMessage("user-1", "first"));
+  await waitFor(() => backend.startRequests.length === 1);
+  await bridge.handleMessage(textMessage("user-1", "second"));
+
+  assert.equal(backend.startRequests.length, 1);
+  assert.match(sender.messages.at(-1) ?? "", /正在处理上一轮任务/);
+  assert.equal(backend.interrupts.length, 0);
+
+  backend.release?.();
+  await first;
 });
 
 test("AgentService falls back to a fresh turn when resume returns no text or session id", async () => {
