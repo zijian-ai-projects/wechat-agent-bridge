@@ -57,7 +57,11 @@ export async function routeCommand(ctx: CommandContext): Promise<CommandResult> 
     if (error instanceof CommandUserError) {
       return { handled: true, reply: error.message };
     }
-    logger.error("Command execution failed", { command, error: error instanceof Error ? error.message : String(error) });
+    const errorDetails =
+      error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : { message: String(error) };
+    logger.error("Command execution failed", { command, error: errorDetails });
     return { handled: true, reply: "命令执行失败，请查看日志。" };
   }
 }
