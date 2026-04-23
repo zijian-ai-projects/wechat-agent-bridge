@@ -159,11 +159,11 @@ export class CodexExecBackend implements AgentBackend {
     return this.runTurn(request, callbacks);
   }
 
-  async interrupt(userId: string): Promise<void> {
-    const child = this.children.get(userId);
+  async interrupt(executionKey: string): Promise<void> {
+    const child = this.children.get(executionKey);
     if (!child) return;
     await interruptChildProcess(child, this.interruptTimeoutMs);
-    this.children.delete(userId);
+    this.children.delete(executionKey);
   }
 
   formatEventForWechat(event: unknown): string | undefined {
@@ -175,12 +175,13 @@ export class CodexExecBackend implements AgentBackend {
     callbacks: { onEvent?: (event: unknown, formatted?: string) => Promise<void> | void },
   ): Promise<AgentTurnResult> {
     const args = buildCodexExecArgs(request);
+    const executionKey = request.executionKey ?? request.userId;
     const child = spawn(this.codexBin, args, {
       cwd: request.cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    this.children.set(request.userId, child);
+    this.children.set(executionKey, child);
 
     let text = "";
     let codexSessionId = request.codexSessionId;
@@ -219,7 +220,7 @@ export class CodexExecBackend implements AgentBackend {
 
     return new Promise((resolve, reject) => {
       child.on("close", (code, signal) => {
-        this.children.delete(request.userId);
+        this.children.delete(executionKey);
         if (signal === "SIGTERM" || signal === "SIGINT" || signal === "SIGKILL") interrupted = true;
         if (code && !interrupted) {
           reject(new Error(`codex exited with code ${code}: ${stderr.trim()}`));

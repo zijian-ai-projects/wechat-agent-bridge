@@ -26,8 +26,8 @@ export class AgentService {
     return { ...resumed, clearedStaleSession: false };
   }
 
-  async interrupt(userId: string): Promise<void> {
-    await this.backend.interrupt(userId);
+  async interrupt(executionKey: string): Promise<void> {
+    await this.backend.interrupt(executionKey);
   }
 
   formatEventForWechat(event: unknown): string | undefined {

@@ -45,6 +45,22 @@ test("buildCodexExecArgs prefers codex exec resume when session id exists", () =
   );
 });
 
+test("AgentTurnRequest can carry a per-project execution key", () => {
+  const request = {
+    userId: "user-1",
+    executionKey: "user-1:SageTalk",
+    prompt: "hi",
+    cwd: "/tmp/SageTalk",
+    mode: "readonly" as const,
+  };
+
+  assert.equal(request.executionKey, "user-1:SageTalk");
+  assert.deepEqual(
+    buildCodexExecArgs(request),
+    ["--sandbox", "read-only", "--ask-for-approval", "never", "--cd", "/tmp/SageTalk", "exec", "--json", "hi"],
+  );
+});
+
 test("formatCodexEventForWechat summarizes key JSONL events", () => {
   assert.equal(
     formatCodexEventForWechat({ type: "thread.started", thread_id: "thread-1" }),

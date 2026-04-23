@@ -177,6 +177,15 @@ test("AgentService falls back to a fresh turn when resume returns no text or ses
   assert.equal(backend.startRequests.length, 1);
 });
 
+test("AgentService interrupts by execution key", async () => {
+  const backend = new FakeBackend();
+  const service = new AgentService(backend);
+
+  await service.interrupt("user-1:SageTalk");
+
+  assert.deepEqual(backend.interrupts, ["user-1:SageTalk"]);
+});
+
 test("ModeService enforces cwd allowlist repo roots", async () => {
   const root = await realpath(mkdtempSync(join(tmpdir(), "wcb-core-mode-")));
   mkdirSync(join(root, ".git"));
