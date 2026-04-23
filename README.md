@@ -7,6 +7,8 @@
 
 wechat-agent-bridge 是一个个人本地桥接器：它监听一个绑定微信号的私聊消息，把普通消息交给本机 coding agent 执行，并把进度和结果回传到微信。
 
+它现在支持显式项目别名和多项目会话：你可以把 `bridge`、`SageTalk` 这样的本地仓库都挂到同一个微信桥上，并分别保留各自的 Codex session、history、mode 和 model。
+
 它不是公共 bot，也不是团队共享服务。v1 默认使用 Codex CLI 后端，只服务一个绑定微信号和当前系统用户的本机 Codex 登录态。
 
 ## 效果示例
@@ -33,6 +35,14 @@ wechat-agent-bridge 是一个个人本地桥接器：它监听一个绑定微信
 ```
 
 bridge 会把这条消息作为 prompt 传给本机 Codex CLI。Codex 的进度会按节流间隔同步到微信，最终结果会回到同一个私聊窗口。
+
+如果只想把某一条消息发给指定项目，可以直接发送：
+
+```text
+@SageTalk run tests and summarize failures
+```
+
+这条消息只会路由到 `SageTalk` 项目，不会切换当前 active project。
 
 ## 安装与启动
 
@@ -95,14 +105,45 @@ npm run daemon -- restart
 微信私聊里可以发送：
 
 - `/help`
-- `/clear`
-- `/status`
+- `/project [alias]`
+- `/interrupt [project]`
+- `/replace [project] <prompt>`
+- `/clear [project]`
+- `/status [project]`
 - `/cwd [path]`
-- `/model [name]`
-- `/mode [readonly|workspace|yolo]`
-- `/history [n]`
+- `/model [project] [name]`
+- `/mode [project] [readonly|workspace|yolo]`
+- `/history [project] [n]`
 
 `/clear` 会丢弃旧 Codex session/thread id，下次普通消息开启全新会话。非 `/clear` 的继续对话优先使用 `codex exec resume <SESSION_ID>`。
+
+## 多项目会话
+
+`~/.wechat-agent-bridge/config.json` 可以显式配置项目别名：
+
+```json
+{
+  "defaultProject": "bridge",
+  "projects": {
+    "bridge": { "cwd": "/Users/you/.codex/projects/wechat-agent-bridge" },
+    "SageTalk": { "cwd": "/Users/you/.codex/projects/SageTalk" }
+  },
+  "extraWritableRoots": [
+    "/Users/you/.codex/projects"
+  ],
+  "streamIntervalMs": 10000
+}
+```
+
+微信里使用：
+
+- `/project` 查看项目列表和当前 active project。
+- `/project SageTalk` 切换当前项目到 `SageTalk`。
+- `@SageTalk 帮我看测试失败` 只把这一条消息发给 `SageTalk`。
+- `/interrupt SageTalk` 中断 `SageTalk` 当前任务。
+- `/replace SageTalk 重新按这个方案实现` 中断并替换 `SageTalk` 当前任务。
+
+每个项目独立保存 Codex session、history、mode 和 model。不同项目可以并发运行；同一项目正在处理时，新消息会被拒绝，除非显式使用 `/interrupt` 或 `/replace`。
 
 ## Codex 模式
 
