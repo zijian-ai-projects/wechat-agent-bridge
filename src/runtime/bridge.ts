@@ -3,7 +3,7 @@ import { realpath } from "node:fs/promises";
 import { CodexExecBackend } from "../backend/CodexExecBackend.js";
 import type { AgentBackend } from "../backend/AgentBackend.js";
 import { loadLatestAccount, type AccountData } from "../config/accounts.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type BridgeConfig } from "../config/config.js";
 import { ProjectRegistry, resolveProjectRegistry, type ProjectDefinition } from "../config/projects.js";
 import { logger } from "../logging/logger.js";
 import { ProjectSessionStore } from "../session/projectSessionStore.js";
@@ -26,27 +26,9 @@ export async function runBridge(backend: AgentBackend = new CodexExecBackend()):
   if (!account) {
     throw new Error("未找到微信账号，请先运行 npm run setup");
   }
-  const registry = await resolveProjectRegistry(config);
-  const extraWritableRoots = await Promise.all(config.extraWritableRoots.map((root) => realpath(root)));
-  const projectSessionStore = new ProjectSessionStore();
-  const agentService = new AgentService(backend);
-
   const api = new WeChatApi(account.botToken, account.baseUrl);
   const sender = createWechatSender(api, account.accountId);
-  const projectManager = new ProjectRuntimeManager({
-    account,
-    registry,
-    sessionStore: projectSessionStore,
-    sender,
-    agentService,
-    streamIntervalMs: config.streamIntervalMs,
-    extraWritableRoots,
-  });
-  const bridgeService = new BridgeService({
-    account,
-    projectManager,
-    sender,
-  });
+  const { bridgeService, projectManager } = await buildProjectBridgeRuntime({ account, config, sender, backend });
   const monitor = new WeChatMonitor(api, {
     onMessage: (message) => bridgeService.handleMessage(message),
     onSessionExpired: () => {
@@ -55,17 +37,46 @@ export async function runBridge(backend: AgentBackend = new CodexExecBackend()):
     },
   });
 
-  const shutdown = async () => {
-    monitor.stop();
-    await projectManager.interruptAll();
-    process.exit(0);
-  };
+  const shutdown = async () => shutdownProjectBridgeRuntime(monitor, projectManager);
   process.once("SIGINT", () => void shutdown());
   process.once("SIGTERM", () => void shutdown());
 
   logger.info("Daemon started", { accountId: account.accountId, boundUserId: account.boundUserId });
   console.log(`wechat-agent-bridge started. Bound user: ${account.boundUserId}`);
   await monitor.run();
+}
+
+export interface BuildProjectBridgeRuntimeOptions {
+  account: AccountData;
+  config: BridgeConfig;
+  sender: WeChatSender;
+  backend: AgentBackend;
+  sessionStore?: ProjectSessionStore;
+}
+
+export async function buildProjectBridgeRuntime(options: BuildProjectBridgeRuntimeOptions): Promise<{
+  bridgeService: BridgeService;
+  projectManager: ProjectRuntimeManager;
+}> {
+  const registry = await resolveProjectRegistry(options.config);
+  const extraWritableRoots = await Promise.all(options.config.extraWritableRoots.map((root) => realpath(root)));
+  const projectSessionStore = options.sessionStore ?? new ProjectSessionStore();
+  const agentService = new AgentService(options.backend);
+  const projectManager = new ProjectRuntimeManager({
+    account: options.account,
+    registry,
+    sessionStore: projectSessionStore,
+    sender: options.sender,
+    agentService,
+    streamIntervalMs: options.config.streamIntervalMs,
+    extraWritableRoots,
+  });
+  const bridgeService = new BridgeService({
+    account: options.account,
+    projectManager,
+    sender: options.sender,
+  });
+  return { bridgeService, projectManager };
 }
 
 async function handleMessageForTestCompat(
@@ -98,6 +109,16 @@ async function handleMessageForTestCompat(
 }
 
 export const handleMessageForTest = handleMessageForTestCompat;
+
+export async function shutdownProjectBridgeRuntime(
+  monitor: Pick<WeChatMonitor, "stop">,
+  projectManager: Pick<ProjectRuntimeManager, "interruptAll">,
+  exit: (code: number) => never | void = process.exit,
+): Promise<void> {
+  monitor.stop();
+  await projectManager.interruptAll();
+  exit(0);
+}
 
 function createCompatProjectSessionStore(session: BridgeSession, store: SessionStorePort): ProjectSessionStore {
   return {
