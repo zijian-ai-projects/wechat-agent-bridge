@@ -34,8 +34,8 @@ class FakeBackend implements AgentBackend {
     return this.results.shift() ?? { text: "ok", interrupted: false, codexSessionId: request.codexSessionId };
   }
 
-  async interrupt(userId: string): Promise<void> {
-    this.interrupts.push(userId);
+  async interrupt(executionKey: string): Promise<void> {
+    this.interrupts.push(executionKey);
   }
 
   formatEventForWechat(): string | undefined {

@@ -2,10 +2,29 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { EventEmitter } from "node:events";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmod } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { getBackendCapabilities } from "../src/backend/capabilities.js";
-import { buildCodexExecArgs, formatCodexEventForWechat, interruptChildProcess } from "../src/backend/CodexExecBackend.js";
+import { buildCodexExecArgs, CodexExecBackend, formatCodexEventForWechat, interruptChildProcess } from "../src/backend/CodexExecBackend.js";
 import { parseJsonLine } from "../src/backend/codexEvents.js";
+
+async function createFakeCodex(prefix: string): Promise<{ dir: string; bin: string }> {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const bin = join(dir, "fake-codex.mjs");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({ type: "turn.started" }) + "\\n");
+setTimeout(() => process.exit(2), 5000);
+`,
+    { mode: 0o700 },
+  );
+  await chmod(bin, 0o700);
+  return { dir, bin };
+}
 
 test("buildCodexExecArgs maps modes to Codex sandbox flags", () => {
   assert.deepEqual(
@@ -61,6 +80,61 @@ test("AgentTurnRequest can carry a per-project execution key", () => {
   );
 });
 
+test("CodexExecBackend interrupts a project turn by execution key", async () => {
+  const { dir, bin } = await createFakeCodex("wcb-codex-exec-key-");
+  const backend = new CodexExecBackend(bin);
+  let started = false;
+
+  const turn = backend.startTurn(
+    {
+      userId: "user-1",
+      executionKey: "user-1:SageTalk",
+      prompt: "hi",
+      cwd: dir,
+      mode: "readonly",
+    },
+    {
+      onEvent: (event) => {
+        if ((event as { type?: string }).type === "turn.started") started = true;
+      },
+    },
+  );
+
+  await waitFor(() => started);
+  await backend.interrupt("user-1:SageTalk");
+
+  const result = await turn;
+
+  assert.equal(result.interrupted, true);
+});
+
+test("CodexExecBackend falls back to user id for legacy interrupts", async () => {
+  const { dir, bin } = await createFakeCodex("wcb-codex-legacy-");
+  const backend = new CodexExecBackend(bin);
+  let started = false;
+
+  const turn = backend.startTurn(
+    {
+      userId: "user-1",
+      prompt: "hi",
+      cwd: dir,
+      mode: "readonly",
+    },
+    {
+      onEvent: (event) => {
+        if ((event as { type?: string }).type === "turn.started") started = true;
+      },
+    },
+  );
+
+  await waitFor(() => started);
+  await backend.interrupt("user-1");
+
+  const result = await turn;
+
+  assert.equal(result.interrupted, true);
+});
+
 test("formatCodexEventForWechat summarizes key JSONL events", () => {
   assert.equal(
     formatCodexEventForWechat({ type: "thread.started", thread_id: "thread-1" }),
@@ -113,3 +187,11 @@ test("backend capabilities mark Codex as the only runnable v1 backend", () => {
   assert.equal(getBackendCapabilities("claude").available, false);
   assert.equal(getBackendCapabilities("cursor").available, false);
 });
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for fake codex to start");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
