@@ -10,11 +10,14 @@ import {
   handleReplace,
   handleStatus,
   handleUnknown,
+  CommandUserError,
   type CommandContext,
   type CommandResult,
 } from "./handlers.js";
+import { logger } from "../logging/logger.js";
 
 export type { CommandContext, CommandResult } from "./handlers.js";
+export { CommandUserError } from "./handlers.js";
 
 export async function routeCommand(ctx: CommandContext): Promise<CommandResult> {
   const text = ctx.text.trimStart();
@@ -30,28 +33,31 @@ export async function routeCommand(ctx: CommandContext): Promise<CommandResult> 
       case "help":
         return handleHelp();
       case "project":
-        return handleProject(ctx, args);
+        return await handleProject(ctx, args);
       case "interrupt":
-        return handleInterrupt(ctx, args);
+        return await handleInterrupt(ctx, args);
       case "replace":
-        return handleReplace(ctx, args);
+        return await handleReplace(ctx, args);
       case "clear":
-        return handleClear(ctx, args);
+        return await handleClear(ctx, args);
       case "status":
-        return handleStatus(ctx, args);
+        return await handleStatus(ctx, args);
       case "cwd":
-        return handleCwd(ctx, args);
+        return await handleCwd(ctx, args);
       case "model":
-        return handleModel(ctx, args);
+        return await handleModel(ctx, args);
       case "mode":
-        return handleMode(ctx, args);
+        return await handleMode(ctx, args);
       case "history":
-        return handleHistory(ctx, args);
+        return await handleHistory(ctx, args);
       default:
         return handleUnknown(command);
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { handled: true, reply: `命令执行失败: ${message}` };
+    if (error instanceof CommandUserError) {
+      return { handled: true, reply: error.message };
+    }
+    logger.error("Command execution failed", { command, error: error instanceof Error ? error.message : String(error) });
+    return { handled: true, reply: "命令执行失败，请查看日志。" };
   }
 }

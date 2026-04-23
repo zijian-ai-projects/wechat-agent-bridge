@@ -36,8 +36,12 @@ class FakeProjectManager {
     this.sessions.set("SageTalk", this.createProjectSession("SageTalk", "/tmp/sage"));
   }
 
+  addProject(alias: string, cwd: string): void {
+    this.sessions.set(alias, this.createProjectSession(alias, cwd));
+  }
+
   listProjects(): Array<{ alias: string; cwd: string; active: boolean }> {
-    return [bridgeProject.alias, sageProject.alias].map((alias) => ({
+    return Array.from(this.sessions.keys()).map((alias) => ({
       alias,
       cwd: this.sessions.get(alias)!.cwd,
       active: alias === this.activeProjectAlias,
@@ -204,6 +208,18 @@ test("/project lists projects and switches the active project", async () => {
   assert.match(switched.reply ?? "", /SageTalk/);
 });
 
+test("project commands without a project manager return intentional user-facing errors", async () => {
+  const root = await realpath(mkdtempSync(join(tmpdir(), "wcb-cmd-")));
+  const session = createSession(root);
+
+  const result = await routeCommand({ text: "/project", session, boundUserId: "user-1" });
+
+  assert.equal(result.handled, true);
+  assert.equal(result.reply, "当前会话不支持项目命令。");
+
+  await rm(root, { recursive: true, force: true });
+});
+
 test("/interrupt targets active and explicit projects", async () => {
   const projectManager = new FakeProjectManager();
   projectManager.setActiveProject("SageTalk");
@@ -292,6 +308,36 @@ test("project-aware /history accepts optional project alias and positive limit",
   assert.match(invalid.reply ?? "", /正整数/);
 });
 
+test("project-aware /history treats a lone numeric alias as active-project limit", async () => {
+  const projectManager = new FakeProjectManager();
+  projectManager.addProject("2", "/tmp/two");
+  const bridge = await projectManager.session("bridge");
+  const numeric = await projectManager.session("2");
+  bridge.history.push(
+    { role: "user", content: "active first", timestamp: "2026-01-01T00:00:00.000Z" },
+    { role: "assistant", content: "active second", timestamp: "2026-01-01T00:01:00.000Z" },
+    { role: "user", content: "active third", timestamp: "2026-01-01T00:02:00.000Z" },
+  );
+  numeric.history.push(
+    { role: "user", content: "numeric first", timestamp: "2026-01-01T00:00:00.000Z" },
+    { role: "assistant", content: "numeric second", timestamp: "2026-01-01T00:01:00.000Z" },
+  );
+
+  const activeLimit = await routeCommand({ text: "/history 2", projectManager, boundUserId: "user-1" });
+  const numericAliasLimit = await routeCommand({ text: "/history 2 1", projectManager, boundUserId: "user-1" });
+
+  assert.equal(activeLimit.handled, true);
+  assert.match(activeLimit.reply ?? "", /项目 bridge 历史/);
+  assert.doesNotMatch(activeLimit.reply ?? "", /active first/);
+  assert.match(activeLimit.reply ?? "", /active second/);
+  assert.match(activeLimit.reply ?? "", /active third/);
+  assert.doesNotMatch(activeLimit.reply ?? "", /numeric/);
+  assert.equal(numericAliasLimit.handled, true);
+  assert.match(numericAliasLimit.reply ?? "", /项目 2 历史/);
+  assert.doesNotMatch(numericAliasLimit.reply ?? "", /numeric first/);
+  assert.match(numericAliasLimit.reply ?? "", /numeric second/);
+});
+
 test("project-aware /mode shows active mode and mutates only targeted projects", async () => {
   const projectManager = new FakeProjectManager();
 
@@ -309,6 +355,22 @@ test("project-aware /mode shows active mode and mutates only targeted projects",
   assert.match(invalid.reply ?? "", /未知模式/);
 });
 
+test("project-aware /mode lets valid mode values win over matching aliases when unambiguous", async () => {
+  const projectManager = new FakeProjectManager();
+  projectManager.addProject("workspace", "/tmp/workspace");
+  await projectManager.setMode("workspace", "yolo");
+
+  const activeMode = await routeCommand({ text: "/mode workspace", projectManager, boundUserId: "user-1" });
+  const targetedAlias = await routeCommand({ text: "/mode workspace readonly", projectManager, boundUserId: "user-1" });
+
+  assert.equal(activeMode.handled, true);
+  assert.equal((await projectManager.session("bridge")).mode, "workspace");
+  assert.match(activeMode.reply ?? "", /项目 bridge 模式已切换为: workspace/);
+  assert.equal(targetedAlias.handled, true);
+  assert.equal((await projectManager.session("workspace")).mode, "readonly");
+  assert.match(targetedAlias.reply ?? "", /项目 workspace 模式已切换为: readonly/);
+});
+
 test("project-aware /model changes only when a non-empty model name is provided", async () => {
   const projectManager = new FakeProjectManager();
   await projectManager.setModel("SageTalk", "sage-model");
@@ -323,6 +385,18 @@ test("project-aware /model changes only when a non-empty model name is provided"
   const whitespace = await routeCommand({ text: "/model SageTalk     ", projectManager, boundUserId: "user-1" });
   assert.equal((await projectManager.session("SageTalk")).model, "gpt-5.4-codex");
   assert.match(whitespace.reply ?? "", /gpt-5.4-codex/);
+});
+
+test("project-aware /model preserves alias-only project query behavior", async () => {
+  const projectManager = new FakeProjectManager();
+  await projectManager.setModel("SageTalk", "sage-model");
+
+  const show = await routeCommand({ text: "/model SageTalk", projectManager, boundUserId: "user-1" });
+
+  assert.equal(show.handled, true);
+  assert.match(show.reply ?? "", /当前项目: SageTalk/);
+  assert.match(show.reply ?? "", /sage-model/);
+  assert.equal((await projectManager.session("bridge")).model, undefined);
 });
 
 test("project-aware /clear clears the targeted project", async () => {
@@ -381,4 +455,57 @@ test("project-aware /cwd lists configured projects and switches only by matching
   await rm(root, { recursive: true, force: true });
   await rm(other, { recursive: true, force: true });
   await rm(outside, { recursive: true, force: true });
+});
+
+test("project-aware /cwd expands home paths and resolves relative paths before matching configured realpaths", async () => {
+  const previousHome = process.env.HOME;
+  const previousCwd = process.cwd();
+  const fakeHome = await realpath(mkdtempSync(join(tmpdir(), "wcb-home-")));
+  const relativeRoot = await realpath(mkdtempSync(join(tmpdir(), "wcb-relative-")));
+  const homeProject = join(fakeHome, "home-project");
+  const relativeProject = join(relativeRoot, "relative-project");
+  mkdirSync(homeProject);
+  mkdirSync(relativeProject);
+  const projectManager = new FakeProjectManager();
+  projectManager.sessions.get("bridge")!.cwd = await realpath(homeProject);
+  projectManager.sessions.get("SageTalk")!.cwd = await realpath(relativeProject);
+
+  try {
+    process.env.HOME = fakeHome;
+    const homeSwitched = await routeCommand({ text: "/cwd ~/home-project", projectManager, boundUserId: "user-1" });
+    assert.equal(homeSwitched.handled, true);
+    assert.equal(projectManager.activeProjectAlias, "bridge");
+    assert.match(homeSwitched.reply ?? "", /bridge/);
+
+    process.chdir(relativeRoot);
+    const relativeSwitched = await routeCommand({ text: "/cwd relative-project", projectManager, boundUserId: "user-1" });
+
+    assert.equal(relativeSwitched.handled, true);
+    assert.equal(projectManager.activeProjectAlias, "SageTalk");
+  } finally {
+    process.chdir(previousCwd);
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    await rm(fakeHome, { recursive: true, force: true });
+    await rm(relativeRoot, { recursive: true, force: true });
+  }
+});
+
+test("project-aware /cwd skips broken configured project cwd while looking for a match", async () => {
+  const missing = join(tmpdir(), `wcb-missing-${Date.now()}`);
+  const other = await realpath(mkdtempSync(join(tmpdir(), "wcb-cmd-project-")));
+  const projectManager = new FakeProjectManager();
+  projectManager.sessions.get("bridge")!.cwd = missing;
+  projectManager.sessions.get("SageTalk")!.cwd = other;
+
+  const switched = await routeCommand({ text: `/cwd ${other}`, projectManager, boundUserId: "user-1" });
+
+  assert.equal(switched.handled, true);
+  assert.equal(projectManager.activeProjectAlias, "SageTalk");
+  assert.doesNotMatch(switched.reply ?? "", /命令执行失败/);
+
+  await rm(other, { recursive: true, force: true });
 });

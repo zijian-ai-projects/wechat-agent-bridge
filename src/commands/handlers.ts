@@ -1,6 +1,8 @@
 import { realpath } from "node:fs/promises";
+import { isAbsolute, normalize, resolve } from "node:path";
 
 import { resolveAllowedRepoRoot } from "../config/git.js";
+import { expandHome } from "../config/security.js";
 import type { AgentMode } from "../backend/AgentBackend.js";
 import type { ProjectRuntimeManager } from "../core/ProjectRuntimeManager.js";
 import type { BridgeSession, ChatHistoryEntry, ProjectSession } from "../session/types.js";
@@ -32,6 +34,13 @@ export interface CommandContext {
 export interface CommandResult {
   handled: boolean;
   reply?: string;
+}
+
+export class CommandUserError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CommandUserError";
+  }
 }
 
 const HELP_TEXT = `可用命令:
@@ -217,7 +226,7 @@ function requireSession(ctx: CommandContext): BridgeSession {
 
 function requireProjectManager(ctx: CommandContext): CommandProjectManager {
   if (!ctx.projectManager) {
-    throw new Error("当前会话不支持项目命令。");
+    throw new CommandUserError("当前会话不支持项目命令。");
   }
   return ctx.projectManager;
 }
@@ -276,6 +285,63 @@ function splitProjectPositionArg(
   return { rest: trimmedStart };
 }
 
+function splitFirstArg(args: string): { first?: string; afterFirst: string; rest: string } {
+  const trimmedStart = args.trimStart();
+  const match = /^(\S+)([\s\S]*)$/.exec(trimmedStart);
+  if (!match) return { afterFirst: "", rest: "" };
+  const [, first, afterFirst] = match;
+  return { first, afterFirst, rest: trimmedStart };
+}
+
+function parseProjectModeArg(
+  manager: CommandProjectManager,
+  args: string,
+): { alias?: string; modeArg: string; unknownAlias?: string } {
+  const parsed = splitFirstArg(args);
+  if (!parsed.first) return { modeArg: "" };
+
+  const afterFirst = parsed.afterFirst.trim();
+  if (!afterFirst && MODES.includes(parsed.first as AgentMode)) {
+    return { modeArg: parsed.first };
+  }
+  if (hasProject(manager, parsed.first)) {
+    return { alias: parsed.first, modeArg: afterFirst };
+  }
+  if (afterFirst) {
+    return { modeArg: afterFirst, unknownAlias: parsed.first };
+  }
+  return { modeArg: parsed.rest.trim() };
+}
+
+function parseProjectHistoryArg(
+  manager: CommandProjectManager,
+  args: string,
+): { alias?: string; limitText: string; unknownAlias?: string } {
+  const parsed = splitFirstArg(args);
+  if (!parsed.first) return { limitText: "" };
+
+  const afterFirst = parsed.afterFirst.trim();
+  if (!afterFirst && isPositiveIntegerText(parsed.first)) {
+    return { limitText: parsed.first };
+  }
+  if (hasProject(manager, parsed.first)) {
+    return { alias: parsed.first, limitText: afterFirst };
+  }
+  if (afterFirst) {
+    return { limitText: afterFirst, unknownAlias: parsed.first };
+  }
+  return { limitText: parsed.rest.trim() };
+}
+
+function isPositiveIntegerText(value: string): boolean {
+  return /^[1-9]\d*$/.test(value);
+}
+
+function normalizeCommandPath(input: string): string {
+  const expanded = expandHome(input.trim());
+  return isAbsolute(expanded) ? normalize(expanded) : resolve(process.cwd(), expanded);
+}
+
 async function handleProjectCwd(manager: CommandProjectManager, args: string): Promise<CommandResult> {
   const input = args.trim();
   if (!input) {
@@ -293,14 +359,19 @@ async function handleProjectCwd(manager: CommandProjectManager, args: string): P
 
   let resolvedInput: string;
   try {
-    resolvedInput = await realpath(input);
+    resolvedInput = await realpath(normalizeCommandPath(input));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { handled: true, reply: `无法切换目录: ${message}` };
   }
 
   for (const project of manager.listProjects()) {
-    const projectCwd = await realpath(project.cwd);
+    let projectCwd: string;
+    try {
+      projectCwd = await realpath(normalizeCommandPath(project.cwd));
+    } catch {
+      continue;
+    }
     if (projectCwd === resolvedInput) {
       manager.setActiveProject(project.alias);
       return { handled: true, reply: `当前项目已切换为: ${project.alias}\n工作目录: ${project.cwd}` };
@@ -326,10 +397,10 @@ async function handleProjectModel(manager: CommandProjectManager, args: string):
 }
 
 async function handleProjectMode(manager: CommandProjectManager, args: string): Promise<CommandResult> {
-  const parsed = splitProjectPositionArg(manager, args);
+  const parsed = parseProjectModeArg(manager, args);
   if (parsed.unknownAlias) return unknownProject(parsed.unknownAlias, manager);
   const alias = parsed.alias;
-  const modeArg = (alias ? parsed.rest : args).trim();
+  const modeArg = parsed.modeArg.trim();
   if (!modeArg) {
     const session = await manager.session(alias);
     return {
@@ -364,10 +435,10 @@ async function handleProjectStatus(ctx: CommandContext, args: string): Promise<C
 }
 
 async function handleProjectHistory(manager: CommandProjectManager, args: string): Promise<CommandResult> {
-  const parsed = splitProjectPositionArg(manager, args);
+  const parsed = parseProjectHistoryArg(manager, args);
   if (parsed.unknownAlias) return unknownProject(parsed.unknownAlias, manager);
   const alias = parsed.alias;
-  const limitText = (alias ? parsed.rest : args).trim();
+  const limitText = parsed.limitText.trim();
   const limit = limitText ? Number.parseInt(limitText, 10) : 20;
   if (!Number.isFinite(limit) || limit <= 0 || (limitText && String(limit) !== limitText)) {
     return { handled: true, reply: "用法: /history [project] [n]，n 必须是正整数。" };
