@@ -15,6 +15,7 @@ interface QueuedTurn {
   codexSessionId?: string;
   codexThreadId?: string;
   interrupted?: boolean;
+  error?: Error;
   events?: Array<{ event: unknown; formatted?: string }>;
   eventsAfterRelease?: Array<{ event: unknown; formatted?: string }>;
   waitForRelease?: string;
@@ -28,6 +29,7 @@ class FakeBackend implements AgentBackend {
   private latestCallbacks?: { onEvent?: (event: unknown, formatted?: string) => Promise<void> | void };
   private readonly queue: QueuedTurn[] = [];
   private readonly releases = new Map<string, () => void>();
+  private readonly interruptReleases = new Map<string, () => void>();
 
   enqueue(turn: QueuedTurn): void {
     this.queue.push(turn);
@@ -38,6 +40,13 @@ class FakeBackend implements AgentBackend {
     if (!release) throw new Error(`No pending turn: ${key}`);
     release();
     this.releases.delete(key);
+  }
+
+  releaseInterrupt(key: string): void {
+    const release = this.interruptReleases.get(key);
+    if (!release) throw new Error(`No pending interrupt: ${key}`);
+    release();
+    this.interruptReleases.delete(key);
   }
 
   async startTurn(
@@ -63,6 +72,10 @@ class FakeBackend implements AgentBackend {
     await this.onInterrupt?.(executionKey);
   }
 
+  async blockInterrupt(key: string): Promise<void> {
+    await new Promise<void>((resolve) => this.interruptReleases.set(key, resolve));
+  }
+
   formatEventForWechat(): string | undefined {
     return undefined;
   }
@@ -82,6 +95,7 @@ class FakeBackend implements AgentBackend {
     for (const item of turn.eventsAfterRelease ?? []) {
       await callbacks.onEvent?.(item.event, item.formatted);
     }
+    if (turn.error) throw turn.error;
     return {
       text: turn.text,
       codexSessionId: turn.codexSessionId,
@@ -284,6 +298,35 @@ test("interrupt invalidates the active turn before backend interrupt can emit tr
   assert.equal(texts.some((text) => text.includes("interrupt-time stale progress")), false);
 });
 
+test("same-project prompt does not start while backend interrupt is still pending", async () => {
+  const { manager, backend, sender } = makeManager();
+  backend.enqueue({
+    text: "old result",
+    waitForRelease: "old",
+    events: [{ event: { type: "turn.started" }, formatted: "old started" }],
+  });
+  backend.enqueue({ text: "new result" });
+  backend.onInterrupt = () => backend.blockInterrupt("bridge");
+
+  const oldRun = manager.runPrompt({ projectAlias: "bridge", prompt: "old", toUserId: "user-1", contextToken: "ctx" });
+  await waitFor(() => sender.messages.some((message) => message.text === "old started"));
+  const interruptRun = manager.interrupt("bridge");
+  await waitFor(() => backend.interrupts.length === 1);
+  await manager.runPrompt({ projectAlias: "bridge", prompt: "new while interrupting", toUserId: "user-1", contextToken: "ctx" });
+
+  assert.equal(backend.startRequests.length, 1);
+  assert.equal(sender.messages.at(-1)?.text, "[bridge] 正在处理上一轮任务。请使用 /interrupt bridge 或 /replace bridge <prompt>。");
+
+  backend.releaseInterrupt("bridge");
+  await interruptRun;
+  backend.release("old");
+  await oldRun;
+
+  await manager.runPrompt({ projectAlias: "bridge", prompt: "new after interrupt", toUserId: "user-1", contextToken: "ctx" });
+  assert.equal(backend.startRequests.length, 2);
+  assert.equal(backend.startRequests[1].prompt, "new after interrupt");
+});
+
 test("replacePrompt without an explicit alias keeps the original active project when interrupt changes active project", async () => {
   const { manager, backend } = makeManager();
   backend.onInterrupt = () => {
@@ -381,6 +424,17 @@ test("active project streams all formatted events while background project only 
   );
 });
 
+test("background multiline errors prefix every line", async () => {
+  const { manager, backend, sender } = makeManager();
+  backend.enqueue({ text: "", error: new Error("line 1\nline 2") });
+
+  await manager.runPrompt({ projectAlias: "SageTalk", prompt: "background error", toUserId: "user-1", contextToken: "ctx" });
+
+  assert.deepEqual(sender.messages.map((message) => message.text), [
+    "[SageTalk] Codex 处理失败: line 1\n[SageTalk] line 2",
+  ]);
+});
+
 test("setMode and setModel update only targeted project session", async () => {
   const { manager } = makeManager();
 
@@ -388,7 +442,7 @@ test("setMode and setModel update only targeted project session", async () => {
   await manager.setModel("SageTalk", "gpt-5.4-codex");
   manager.setActiveProject("bridge");
   await manager.setMode(undefined, "yolo");
-  await manager.setModel(undefined, "active-model");
+  await manager.setModel(undefined, "  active-model  ");
 
   const bridge = await manager.session("bridge");
   const sage = await manager.session("SageTalk");
@@ -396,6 +450,8 @@ test("setMode and setModel update only targeted project session", async () => {
   assert.equal(bridge.model, "active-model");
   assert.equal(sage.mode, "workspace");
   assert.equal(sage.model, "gpt-5.4-codex");
+  await manager.setModel(undefined, "   ");
+  assert.equal((await manager.session("bridge")).model, undefined);
   await assert.rejects(manager.setMode("bridge", "invalid"), /Invalid mode/);
 });
 

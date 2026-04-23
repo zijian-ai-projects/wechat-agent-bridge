@@ -46,6 +46,7 @@ export class ProjectRuntime {
   private readonly streamIntervalMs: number;
   private readonly extraWritableRoots: string[];
   private sessionPromise?: Promise<ProjectSession>;
+  private interruptPromise?: Promise<void>;
 
   constructor(options: ProjectRuntimeOptions) {
     this.userId = options.userId;
@@ -65,7 +66,7 @@ export class ProjectRuntime {
 
   async runPrompt(options: ProjectRunPromptOptions): Promise<void> {
     const session = await this.session();
-    if (session.state === "processing") throw new BusyProjectError(this.project.alias);
+    if (this.interruptPromise || session.state === "processing") throw new BusyProjectError(this.project.alias);
 
     const turnId = randomUUID();
     session.state = "processing";
@@ -144,11 +145,24 @@ export class ProjectRuntime {
   }
 
   async interrupt(): Promise<void> {
-    const session = await this.session();
-    session.state = "idle";
-    session.activeTurnId = undefined;
-    await this.sessionStore.save(session);
-    await this.agentService.interrupt(this.executionKey);
+    if (this.interruptPromise) {
+      await this.interruptPromise;
+      return;
+    }
+
+    const interruptPromise = (async () => {
+      const session = await this.session();
+      session.state = "idle";
+      session.activeTurnId = undefined;
+      await this.sessionStore.save(session);
+      await this.agentService.interrupt(this.executionKey);
+    })();
+    this.interruptPromise = interruptPromise;
+    try {
+      await interruptPromise;
+    } finally {
+      if (this.interruptPromise === interruptPromise) this.interruptPromise = undefined;
+    }
   }
 
   async clear(): Promise<ProjectSession> {

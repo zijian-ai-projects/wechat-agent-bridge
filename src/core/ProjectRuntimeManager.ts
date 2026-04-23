@@ -135,7 +135,7 @@ export class ProjectRuntimeManager {
 
   async setModel(alias: string | undefined, model: string | undefined): Promise<ProjectSession> {
     const session = await this.session(alias);
-    session.model = model || undefined;
+    session.model = model?.trim() || undefined;
     await this.sessionStore.save(session);
     return session;
   }
