@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 
 import type { AgentBackend, AgentTurnRequest, AgentTurnResult } from "../src/backend/AgentBackend.js";
 import { AgentService } from "../src/core/AgentService.js";
-import { ProjectRuntimeManager } from "../src/core/ProjectRuntimeManager.js";
+import { ProjectInitRequiredError, ProjectRuntimeManager } from "../src/core/ProjectRuntimeManager.js";
 import type { TextSender } from "../src/core/types.js";
 import type { AccountData } from "../src/config/accounts.js";
-import { ProjectRegistry, type ProjectDefinition } from "../src/config/projects.js";
+import type { DiscoveredProject, ProjectDefinition } from "../src/config/projects.js";
 import type { ProjectSessionStore } from "../src/session/projectSessionStore.js";
 import type { ProjectSession } from "../src/session/types.js";
 
@@ -170,29 +170,68 @@ class MemorySender implements TextSender {
   }
 }
 
-const account: Pick<AccountData, "boundUserId"> = { boundUserId: "user-1" };
-const bridgeProject: ProjectDefinition = { alias: "bridge", cwd: "/tmp/bridge" };
-const sageProject: ProjectDefinition = { alias: "SageTalk", cwd: "/tmp/sage" };
+class MemoryProjectCatalog {
+  readonly initialized: string[] = [];
 
-function makeManager(options: { streamIntervalMs?: number } = {}): {
+  constructor(readonly projects: DiscoveredProject[]) {}
+
+  async list(): Promise<DiscoveredProject[]> {
+    return this.projects.map((project) => ({ ...project }));
+  }
+
+  async get(alias: string): Promise<DiscoveredProject | undefined> {
+    return this.projects.find((project) => project.alias === alias);
+  }
+
+  async resolveInitialProject(defaultProject: string, lastProject?: string): Promise<DiscoveredProject> {
+    return (await this.get(lastProject ?? "")) ?? (await this.get(defaultProject))!;
+  }
+
+  async init(alias: string): Promise<DiscoveredProject> {
+    const project = this.projects.find((item) => item.alias === alias);
+    if (!project) throw new Error(`Unknown project: ${alias}`);
+    project.ready = true;
+    this.initialized.push(alias);
+    return { ...project };
+  }
+}
+
+const account: Pick<AccountData, "boundUserId"> = { boundUserId: "user-1" };
+const bridgeProject: DiscoveredProject = { alias: "bridge", cwd: "/tmp/bridge", ready: true };
+const sageProject: DiscoveredProject = { alias: "SageTalk", cwd: "/tmp/sage", ready: true };
+
+function makeManager(
+  options: {
+    streamIntervalMs?: number;
+    projects?: DiscoveredProject[];
+    initialProjectAlias?: string;
+    defaultProjectAlias?: string;
+    rememberActiveProject?: (alias: string) => Promise<void> | void;
+  } = {},
+): {
   manager: ProjectRuntimeManager;
   backend: FakeBackend;
   store: MemoryProjectSessionStore;
   sender: MemorySender;
+  catalog: MemoryProjectCatalog;
 } {
   const backend = new FakeBackend();
   const store = new MemoryProjectSessionStore();
   const sender = new MemorySender();
+  const catalog = new MemoryProjectCatalog((options.projects ?? [bridgeProject, sageProject]).map((project) => ({ ...project })));
   const manager = new ProjectRuntimeManager({
     account,
-    registry: new ProjectRegistry("bridge", new Map([["bridge", bridgeProject], ["SageTalk", sageProject]])),
+    catalog,
     sessionStore: store as unknown as ProjectSessionStore,
     sender,
     agentService: new AgentService(backend),
     streamIntervalMs: options.streamIntervalMs ?? 0,
     extraWritableRoots: ["/tmp/extra"],
+    initialProjectAlias: options.initialProjectAlias ?? "bridge",
+    defaultProjectAlias: options.defaultProjectAlias ?? "bridge",
+    rememberActiveProject: options.rememberActiveProject,
   });
-  return { manager, backend, store, sender };
+  return { manager, backend, store, sender, catalog };
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
@@ -202,6 +241,88 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   }
   assert.equal(predicate(), true);
 }
+
+test("setActiveProject persists the selected project name", async () => {
+  const remembered: string[] = [];
+  const { manager } = makeManager({
+    rememberActiveProject: async (alias) => {
+      remembered.push(alias);
+    },
+  });
+
+  await manager.setActiveProject("SageTalk");
+
+  assert.equal(manager.activeProjectAlias, "SageTalk");
+  assert.deepEqual(remembered, ["SageTalk"]);
+});
+
+test("initializeProject marks a child ready, switches to it, and persists the selection", async () => {
+  const remembered: string[] = [];
+  const { manager, catalog } = makeManager({
+    projects: [
+      bridgeProject,
+      { alias: "scratch", cwd: "/tmp/scratch", ready: false },
+    ],
+    rememberActiveProject: async (alias) => {
+      remembered.push(alias);
+    },
+  });
+
+  const project = await manager.initializeProject("scratch");
+
+  assert.equal(project.ready, true);
+  assert.equal(manager.activeProjectAlias, "scratch");
+  assert.deepEqual(catalog.initialized, ["scratch"]);
+  assert.deepEqual(remembered, ["scratch"]);
+});
+
+test("listProjects reflects newly added child directories without restarting the manager", async () => {
+  const { manager, catalog } = makeManager({ projects: [bridgeProject] });
+
+  assert.deepEqual(
+    (await manager.listProjects()).map((project) => project.alias),
+    ["bridge"],
+  );
+
+  catalog.projects.push({ alias: "SageTalk", cwd: "/tmp/sage", ready: true });
+
+  assert.deepEqual(
+    (await manager.listProjects()).map((project) => project.alias),
+    ["bridge", "SageTalk"],
+  );
+});
+
+test("missing active project falls back to the configured default project and remembers it", async () => {
+  const remembered: string[] = [];
+  const { manager } = makeManager({
+    initialProjectAlias: "deleted-project",
+    defaultProjectAlias: "bridge",
+    rememberActiveProject: async (alias) => {
+      remembered.push(alias);
+    },
+  });
+
+  const session = await manager.session();
+
+  assert.equal(session.projectAlias, "bridge");
+  assert.equal(manager.activeProjectAlias, "bridge");
+  assert.deepEqual(remembered, ["bridge"]);
+});
+
+test("runtime execution rejects non-git projects until they are initialized", async () => {
+  const { manager, backend } = makeManager({
+    projects: [
+      bridgeProject,
+      { alias: "scratch", cwd: "/tmp/scratch", ready: false },
+    ],
+  });
+
+  await assert.rejects(
+    manager.runPrompt({ projectAlias: "scratch", prompt: "run tests", toUserId: "user-1", contextToken: "ctx" }),
+    ProjectInitRequiredError,
+  );
+  assert.equal(backend.startRequests.length, 0);
+});
 
 test("different projects run concurrently with separate execution keys", async () => {
   const { manager, backend } = makeManager();
@@ -329,8 +450,8 @@ test("same-project prompt does not start while backend interrupt is still pendin
 
 test("replacePrompt without an explicit alias keeps the original active project when interrupt changes active project", async () => {
   const { manager, backend } = makeManager();
-  backend.onInterrupt = () => {
-    manager.setActiveProject("SageTalk");
+  backend.onInterrupt = async () => {
+    await manager.setActiveProject("SageTalk");
   };
   backend.enqueue({ text: "replacement" });
 
@@ -354,7 +475,7 @@ test("running active project output becomes prefixed when the project moves to b
 
   const bridgeRun = manager.runPrompt({ projectAlias: "bridge", prompt: "bridge", toUserId: "user-1", contextToken: "ctx" });
   await waitFor(() => sender.messages.some((message) => message.text === "first active progress"));
-  manager.setActiveProject("SageTalk");
+  await manager.setActiveProject("SageTalk");
   backend.release("bridge");
   await bridgeRun;
 
@@ -379,7 +500,7 @@ test("running background project output becomes unprefixed and complete when the
 
   const sageRun = manager.runPrompt({ projectAlias: "SageTalk", prompt: "sage", toUserId: "user-1", contextToken: "ctx" });
   await waitFor(() => sender.messages.some((message) => message.text === "[SageTalk] sage started"));
-  manager.setActiveProject("SageTalk");
+  await manager.setActiveProject("SageTalk");
   backend.release("sage");
   await sageRun;
 
@@ -440,7 +561,7 @@ test("setMode and setModel update only targeted project session", async () => {
 
   await manager.setMode("SageTalk", "workspace");
   await manager.setModel("SageTalk", "gpt-5.4-codex");
-  manager.setActiveProject("bridge");
+  await manager.setActiveProject("bridge");
   await manager.setMode(undefined, "yolo");
   await manager.setModel(undefined, "  active-model  ");
 
@@ -455,21 +576,21 @@ test("setMode and setModel update only targeted project session", async () => {
   await assert.rejects(manager.setMode("bridge", "invalid"), /Invalid mode/);
 });
 
-test("manager exposes active project state in activeProjectAlias and listProjects", () => {
+test("manager exposes active project state in activeProjectAlias and listProjects", async () => {
   const { manager } = makeManager();
 
   assert.equal(manager.activeProjectAlias, "bridge");
-  assert.deepEqual(manager.listProjects(), [
-    { alias: "bridge", cwd: bridgeProject.cwd, active: true },
-    { alias: "SageTalk", cwd: sageProject.cwd, active: false },
+  assert.deepEqual(await manager.listProjects(), [
+    { alias: "bridge", cwd: bridgeProject.cwd, ready: true, active: true },
+    { alias: "SageTalk", cwd: sageProject.cwd, ready: true, active: false },
   ]);
 
-  manager.setActiveProject("SageTalk");
+  await manager.setActiveProject("SageTalk");
 
   assert.equal(manager.activeProjectAlias, "SageTalk");
-  assert.deepEqual(manager.listProjects(), [
-    { alias: "bridge", cwd: bridgeProject.cwd, active: false },
-    { alias: "SageTalk", cwd: sageProject.cwd, active: true },
+  assert.deepEqual(await manager.listProjects(), [
+    { alias: "bridge", cwd: bridgeProject.cwd, ready: true, active: false },
+    { alias: "SageTalk", cwd: sageProject.cwd, ready: true, active: true },
   ]);
 });
 

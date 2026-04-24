@@ -40,19 +40,20 @@ class FakeProjectManager {
     this.sessions.set(alias, this.createProjectSession(alias, cwd));
   }
 
-  listProjects(): Array<{ alias: string; cwd: string; active: boolean }> {
+  async listProjects(): Promise<Array<{ alias: string; cwd: string; ready: boolean; active: boolean }>> {
     return Array.from(this.sessions.keys()).map((alias) => ({
       alias,
       cwd: this.sessions.get(alias)!.cwd,
+      ready: true,
       active: alias === this.activeProjectAlias,
     }));
   }
 
-  setActiveProject(alias: string): { alias: string; cwd: string } {
-    const project = this.listProjects().find((item) => item.alias === alias);
+  async setActiveProject(alias: string): Promise<{ alias: string; cwd: string; ready: boolean }> {
+    const project = (await this.listProjects()).find((item) => item.alias === alias);
     if (!project) throw new Error(`Unknown project: ${alias}`);
     this.activeProjectAlias = alias;
-    return { alias: project.alias, cwd: project.cwd };
+    return { alias: project.alias, cwd: project.cwd, ready: true };
   }
 
   async interrupt(alias?: string): Promise<void> {
@@ -222,7 +223,7 @@ test("project commands without a project manager return intentional user-facing 
 
 test("/interrupt targets active and explicit projects", async () => {
   const projectManager = new FakeProjectManager();
-  projectManager.setActiveProject("SageTalk");
+  await projectManager.setActiveProject("SageTalk");
 
   const active = await routeCommand({ text: "/interrupt", projectManager, boundUserId: "user-1" });
   const explicit = await routeCommand({ text: "/interrupt bridge", projectManager, boundUserId: "user-1" });
@@ -234,7 +235,7 @@ test("/interrupt targets active and explicit projects", async () => {
 
 test("/replace targets explicit and active projects with WeChat context", async () => {
   const projectManager = new FakeProjectManager();
-  projectManager.setActiveProject("SageTalk");
+  await projectManager.setActiveProject("SageTalk");
 
   const explicit = await routeCommand({
     text: "/replace bridge fix tests",

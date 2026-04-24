@@ -65,19 +65,19 @@ export async function handleProject(ctx: CommandContext, args: string): Promise<
   const manager = requireProjectManager(ctx);
   const alias = args.trim();
   if (!alias) {
-    return { handled: true, reply: formatProjectList(manager) };
+    return { handled: true, reply: await formatProjectList(manager) };
   }
-  if (!hasProject(manager, alias)) {
+  if (!(await hasProject(manager, alias))) {
     return unknownProject(alias, manager);
   }
-  const project = manager.setActiveProject(alias);
+  const project = await manager.setActiveProject(alias);
   return { handled: true, reply: `当前项目已切换为: ${project.alias}\n工作目录: ${project.cwd}` };
 }
 
 export async function handleInterrupt(ctx: CommandContext, args: string): Promise<CommandResult> {
   const manager = requireProjectManager(ctx);
   const alias = args.trim() || undefined;
-  if (alias && !hasProject(manager, alias)) {
+  if (alias && !(await hasProject(manager, alias))) {
     return unknownProject(alias, manager);
   }
   await manager.interrupt(alias);
@@ -86,7 +86,7 @@ export async function handleInterrupt(ctx: CommandContext, args: string): Promis
 
 export async function handleReplace(ctx: CommandContext, args: string): Promise<CommandResult> {
   const manager = requireProjectManager(ctx);
-  const parsed = splitProjectArg(manager, args);
+  const parsed = await splitProjectArg(manager, args);
   const prompt = parsed.rest.trim();
   if (!prompt) {
     return { handled: true, reply: "用法: /replace [project] <prompt>" };
@@ -102,7 +102,7 @@ export async function handleReplace(ctx: CommandContext, args: string): Promise<
 
 export async function handleClear(ctx: CommandContext, args = ""): Promise<CommandResult> {
   if (ctx.projectManager) {
-    const alias = parseOptionalProjectAlias(ctx.projectManager, args);
+    const alias = await parseOptionalProjectAlias(ctx.projectManager, args);
     if (alias instanceof Error) return unknownProject(alias.message, ctx.projectManager);
     await ctx.projectManager.clear(alias);
     return { handled: true, reply: `项目 ${alias ?? ctx.projectManager.activeProjectAlias} 会话已清除，下次消息将开始新 Codex 会话。` };
@@ -231,52 +231,57 @@ function requireProjectManager(ctx: CommandContext): CommandProjectManager {
   return ctx.projectManager;
 }
 
-function formatProjectList(manager: CommandProjectManager): string {
+async function formatProjectList(manager: CommandProjectManager): Promise<string> {
+  const projects = await manager.listProjects();
   return [
     "项目列表:",
-    ...manager.listProjects().map((project) => `${project.active ? "*" : " "} ${project.alias} - ${project.cwd}`),
+    ...projects.map((project) => `${project.active ? "*" : " "} ${project.alias} - ${project.cwd}`),
     `当前项目: ${manager.activeProjectAlias}`,
   ].join("\n");
 }
 
-function hasProject(manager: CommandProjectManager, alias: string): boolean {
-  return manager.listProjects().some((project) => project.alias === alias);
+async function hasProject(manager: CommandProjectManager, alias: string): Promise<boolean> {
+  return (await manager.listProjects()).some((project) => project.alias === alias);
 }
 
-function unknownProject(alias: string, manager: CommandProjectManager): CommandResult {
+async function unknownProject(alias: string, manager: CommandProjectManager): Promise<CommandResult> {
+  const projects = await manager.listProjects();
   return {
     handled: true,
-    reply: `未知项目: ${alias}\n可用项目: ${manager.listProjects().map((project) => project.alias).join(", ")}`,
+    reply: `未知项目: ${alias}\n可用项目: ${projects.map((project) => project.alias).join(", ")}`,
   };
 }
 
-function parseOptionalProjectAlias(manager: CommandProjectManager, args: string): string | undefined | Error {
+async function parseOptionalProjectAlias(manager: CommandProjectManager, args: string): Promise<string | undefined | Error> {
   const trimmed = args.trim();
   if (!trimmed) return undefined;
-  if (hasProject(manager, trimmed)) return trimmed;
+  if (await hasProject(manager, trimmed)) return trimmed;
   return new Error(trimmed);
 }
 
-function splitProjectArg(manager: CommandProjectManager, args: string): { alias?: string; rest: string; first?: string; afterFirst: string } {
+async function splitProjectArg(
+  manager: CommandProjectManager,
+  args: string,
+): Promise<{ alias?: string; rest: string; first?: string; afterFirst: string }> {
   const trimmedStart = args.trimStart();
   const match = /^(\S+)([\s\S]*)$/.exec(trimmedStart);
   if (!match) return { rest: "", afterFirst: "" };
   const [, first, afterFirst] = match;
-  if (hasProject(manager, first)) {
+  if (await hasProject(manager, first)) {
     return { alias: first, rest: afterFirst, first, afterFirst };
   }
   return { rest: trimmedStart, first, afterFirst };
 }
 
-function splitProjectPositionArg(
+async function splitProjectPositionArg(
   manager: CommandProjectManager,
   args: string,
-): { alias?: string; rest: string; unknownAlias?: string } {
+): Promise<{ alias?: string; rest: string; unknownAlias?: string }> {
   const trimmedStart = args.trimStart();
   const match = /^(\S+)([\s\S]*)$/.exec(trimmedStart);
   if (!match) return { rest: "" };
   const [, first, afterFirst] = match;
-  if (hasProject(manager, first)) {
+  if (await hasProject(manager, first)) {
     return { alias: first, rest: afterFirst };
   }
   if (afterFirst.trim()) {
@@ -293,10 +298,10 @@ function splitFirstArg(args: string): { first?: string; afterFirst: string; rest
   return { first, afterFirst, rest: trimmedStart };
 }
 
-function parseProjectModeArg(
+async function parseProjectModeArg(
   manager: CommandProjectManager,
   args: string,
-): { alias?: string; modeArg: string; unknownAlias?: string } {
+): Promise<{ alias?: string; modeArg: string; unknownAlias?: string }> {
   const parsed = splitFirstArg(args);
   if (!parsed.first) return { modeArg: "" };
 
@@ -304,7 +309,7 @@ function parseProjectModeArg(
   if (!afterFirst && MODES.includes(parsed.first as AgentMode)) {
     return { modeArg: parsed.first };
   }
-  if (hasProject(manager, parsed.first)) {
+  if (await hasProject(manager, parsed.first)) {
     return { alias: parsed.first, modeArg: afterFirst };
   }
   if (afterFirst) {
@@ -313,10 +318,10 @@ function parseProjectModeArg(
   return { modeArg: parsed.rest.trim() };
 }
 
-function parseProjectHistoryArg(
+async function parseProjectHistoryArg(
   manager: CommandProjectManager,
   args: string,
-): { alias?: string; limitText: string; unknownAlias?: string } {
+): Promise<{ alias?: string; limitText: string; unknownAlias?: string }> {
   const parsed = splitFirstArg(args);
   if (!parsed.first) return { limitText: "" };
 
@@ -324,7 +329,7 @@ function parseProjectHistoryArg(
   if (!afterFirst && isPositiveIntegerText(parsed.first)) {
     return { limitText: parsed.first };
   }
-  if (hasProject(manager, parsed.first)) {
+  if (await hasProject(manager, parsed.first)) {
     return { alias: parsed.first, limitText: afterFirst };
   }
   if (afterFirst) {
@@ -346,13 +351,14 @@ async function handleProjectCwd(manager: CommandProjectManager, args: string): P
   const input = args.trim();
   if (!input) {
     const active = await manager.session();
+    const projects = await manager.listProjects();
     return {
       handled: true,
       reply: [
         `当前项目: ${manager.activeProjectAlias}`,
         `当前工作目录: ${active.cwd}`,
         "已配置项目:",
-        ...manager.listProjects().map((project) => `${project.active ? "*" : " "} ${project.alias} - ${project.cwd}`),
+        ...projects.map((project) => `${project.active ? "*" : " "} ${project.alias} - ${project.cwd}`),
       ].join("\n"),
     };
   }
@@ -365,7 +371,7 @@ async function handleProjectCwd(manager: CommandProjectManager, args: string): P
     return { handled: true, reply: `无法切换目录: ${message}` };
   }
 
-  for (const project of manager.listProjects()) {
+  for (const project of await manager.listProjects()) {
     let projectCwd: string;
     try {
       projectCwd = await realpath(normalizeCommandPath(project.cwd));
@@ -373,7 +379,7 @@ async function handleProjectCwd(manager: CommandProjectManager, args: string): P
       continue;
     }
     if (projectCwd === resolvedInput) {
-      manager.setActiveProject(project.alias);
+      await manager.setActiveProject(project.alias);
       return { handled: true, reply: `当前项目已切换为: ${project.alias}\n工作目录: ${project.cwd}` };
     }
   }
@@ -381,7 +387,7 @@ async function handleProjectCwd(manager: CommandProjectManager, args: string): P
 }
 
 async function handleProjectModel(manager: CommandProjectManager, args: string): Promise<CommandResult> {
-  const parsed = splitProjectPositionArg(manager, args);
+  const parsed = await splitProjectPositionArg(manager, args);
   if (parsed.unknownAlias) return unknownProject(parsed.unknownAlias, manager);
   const alias = parsed.alias;
   const modelArg = alias ? parsed.rest : args;
@@ -397,7 +403,7 @@ async function handleProjectModel(manager: CommandProjectManager, args: string):
 }
 
 async function handleProjectMode(manager: CommandProjectManager, args: string): Promise<CommandResult> {
-  const parsed = parseProjectModeArg(manager, args);
+  const parsed = await parseProjectModeArg(manager, args);
   if (parsed.unknownAlias) return unknownProject(parsed.unknownAlias, manager);
   const alias = parsed.alias;
   const modeArg = parsed.modeArg.trim();
@@ -420,12 +426,12 @@ async function handleProjectStatus(ctx: CommandContext, args: string): Promise<C
   const manager = requireProjectManager(ctx);
   const alias = args.trim();
   if (alias) {
-    if (!hasProject(manager, alias)) return unknownProject(alias, manager);
+    if (!(await hasProject(manager, alias))) return unknownProject(alias, manager);
     const session = await manager.session(alias);
     return { handled: true, reply: formatProjectSessionStatus(ctx.boundUserId, session) };
   }
   const lines = ["项目状态", `用户: ${ctx.boundUserId}`, `当前项目: ${manager.activeProjectAlias}`];
-  for (const project of manager.listProjects()) {
+  for (const project of await manager.listProjects()) {
     const session = await manager.session(project.alias);
     lines.push(
       `${project.active ? "*" : " "} ${project.alias} | ${session.state} | ${session.mode} | ${session.model ?? "Codex 默认"} | ${session.cwd}`,
@@ -435,7 +441,7 @@ async function handleProjectStatus(ctx: CommandContext, args: string): Promise<C
 }
 
 async function handleProjectHistory(manager: CommandProjectManager, args: string): Promise<CommandResult> {
-  const parsed = parseProjectHistoryArg(manager, args);
+  const parsed = await parseProjectHistoryArg(manager, args);
   if (parsed.unknownAlias) return unknownProject(parsed.unknownAlias, manager);
   const alias = parsed.alias;
   const limitText = parsed.limitText.trim();

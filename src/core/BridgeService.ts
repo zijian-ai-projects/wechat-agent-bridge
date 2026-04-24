@@ -59,8 +59,8 @@ export class BridgeService {
     }
 
     const targeted = parseTargetedPrompt(rawText);
-    if (targeted && !hasProjectAlias(this.projectManager, targeted.projectAlias)) {
-      await this.sender.sendText(fromUserId, contextToken, formatUnknownProjectReply(this.projectManager, targeted.projectAlias));
+    if (targeted && !(await hasProjectAlias(this.projectManager, targeted.projectAlias))) {
+      await this.sender.sendText(fromUserId, contextToken, await formatUnknownProjectReply(this.projectManager, targeted.projectAlias));
       return;
     }
     await this.projectManager.runPrompt({
@@ -78,12 +78,12 @@ export function parseTargetedPrompt(text: string): { projectAlias: string; promp
   return { projectAlias: match[1], prompt: match[2].trim() };
 }
 
-function hasProjectAlias(projectManager: BridgeProjectManager, alias: string): boolean {
-  return projectManager.listProjects().some((project) => project.alias === alias);
+async function hasProjectAlias(projectManager: BridgeProjectManager, alias: string): Promise<boolean> {
+  return (await projectManager.listProjects()).some((project) => project.alias === alias);
 }
 
-function formatUnknownProjectReply(projectManager: BridgeProjectManager, alias: string): string {
-  return `未知项目: ${alias}\n可用项目: ${projectManager.listProjects().map((project) => project.alias).join(", ")}`;
+async function formatUnknownProjectReply(projectManager: BridgeProjectManager, alias: string): Promise<string> {
+  return `未知项目: ${alias}\n可用项目: ${(await projectManager.listProjects()).map((project) => project.alias).join(", ")}`;
 }
 
 function extractBridgeMessageText(message: WeixinMessage): { rawText: string; normalizedText: string } {

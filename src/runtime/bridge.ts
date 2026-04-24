@@ -4,7 +4,8 @@ import { CodexExecBackend } from "../backend/CodexExecBackend.js";
 import type { AgentBackend } from "../backend/AgentBackend.js";
 import { loadLatestAccount, type AccountData } from "../config/accounts.js";
 import { loadConfig, type BridgeConfig } from "../config/config.js";
-import { ProjectRegistry, resolveProjectRegistry, type ProjectDefinition } from "../config/projects.js";
+import { ProjectCatalog, resolveProjectsRootConfig, type ProjectDefinition } from "../config/projects.js";
+import { loadRuntimeState, saveRuntimeState, type BridgeRuntimeState } from "../config/runtimeState.js";
 import { logger } from "../logging/logger.js";
 import { ProjectSessionStore } from "../session/projectSessionStore.js";
 import type { BridgeSession, ProjectSession } from "../session/types.js";
@@ -52,24 +53,35 @@ export interface BuildProjectBridgeRuntimeOptions {
   sender: WeChatSender;
   backend: AgentBackend;
   sessionStore?: ProjectSessionStore;
+  loadRuntimeState?: () => BridgeRuntimeState;
+  saveRuntimeState?: (state: BridgeRuntimeState) => void;
 }
 
 export async function buildProjectBridgeRuntime(options: BuildProjectBridgeRuntimeOptions): Promise<{
   bridgeService: BridgeService;
   projectManager: ProjectRuntimeManager;
 }> {
-  const registry = await resolveProjectRegistry(options.config);
-  const extraWritableRoots = await Promise.all(options.config.extraWritableRoots.map((root) => realpath(root)));
+  const resolvedConfig = await resolveProjectsRootConfig(options.config);
+  const catalog = new ProjectCatalog(resolvedConfig.projectsRoot);
+  const runtimeState = options.loadRuntimeState?.() ?? loadRuntimeState();
+  const initialProject = await catalog.resolveInitialProject(resolvedConfig.defaultProject, runtimeState.lastProject);
+  if (runtimeState.lastProject && initialProject.alias !== runtimeState.lastProject) {
+    (options.saveRuntimeState ?? saveRuntimeState)({ lastProject: initialProject.alias });
+  }
+  const extraWritableRoots = await Promise.all((options.config.extraWritableRoots ?? []).map((root) => realpath(root)));
   const projectSessionStore = options.sessionStore ?? new ProjectSessionStore();
   const agentService = new AgentService(options.backend);
   const projectManager = new ProjectRuntimeManager({
     account: options.account,
-    registry,
+    catalog,
     sessionStore: projectSessionStore,
     sender: options.sender,
     agentService,
     streamIntervalMs: options.config.streamIntervalMs,
     extraWritableRoots,
+    initialProjectAlias: initialProject.alias,
+    defaultProjectAlias: resolvedConfig.defaultProject,
+    rememberActiveProject: async (alias) => (options.saveRuntimeState ?? saveRuntimeState)({ lastProject: alias }),
   });
   const bridgeService = new BridgeService({
     account: options.account,
@@ -89,16 +101,32 @@ async function handleMessageForTestCompat(
   streamIntervalMs: number,
   extraWritableRoots: string[] = [],
 ): Promise<void> {
-  const registry = new ProjectRegistry("default", new Map([["default", { alias: "default", cwd: session.cwd }]]));
+  const compatProject = { alias: "default", cwd: session.cwd, ready: true } as const;
+  const catalog = {
+    async list() {
+      return [{ ...compatProject }];
+    },
+    async get(alias: string) {
+      return alias === compatProject.alias ? { ...compatProject } : undefined;
+    },
+    async resolveInitialProject() {
+      return { ...compatProject };
+    },
+    async init() {
+      return { ...compatProject };
+    },
+  };
   const projectSessionStore = createCompatProjectSessionStore(session, sessionStore);
   const projectManager = new ProjectRuntimeManager({
     account,
-    registry,
+    catalog,
     sessionStore: projectSessionStore,
     sender,
     agentService: new AgentService(backend),
     streamIntervalMs,
     extraWritableRoots,
+    initialProjectAlias: compatProject.alias,
+    defaultProjectAlias: compatProject.alias,
   });
   const service = new BridgeService({
     account,

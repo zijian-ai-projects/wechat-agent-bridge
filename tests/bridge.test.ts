@@ -99,11 +99,22 @@ function textMessage(fromUserId: string, text: string): WeixinMessage {
   };
 }
 
-async function makeGitRepo(prefix: string): Promise<string> {
-  const dir = await realpath(mkdtempSync(join(tmpdir(), prefix)));
-  mkdirSync(join(dir, ".git"));
-  await writeFile(join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
-  return dir;
+async function makeProjectsRoot(projects: Array<{ alias: string; ready?: boolean }>): Promise<{
+  root: string;
+  projectsByAlias: Record<string, string>;
+}> {
+  const root = await realpath(mkdtempSync(join(tmpdir(), "wcb-runtime-root-")));
+  const projectsByAlias: Record<string, string> = {};
+  for (const project of projects) {
+    const cwd = join(root, project.alias);
+    mkdirSync(cwd, { recursive: true });
+    if (project.ready ?? true) {
+      mkdirSync(join(cwd, ".git"), { recursive: true });
+      await writeFile(join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n");
+    }
+    projectsByAlias[project.alias] = cwd;
+  }
+  return { root, projectsByAlias };
 }
 
 test("handleMessage ignores stranger and group messages", async () => {
@@ -157,23 +168,19 @@ test("/clear clears the default project session and does not resume old session"
   assert.match(sender.messages.join("\n"), /项目 default 会话已清除/);
 });
 
-test("buildProjectBridgeRuntime wires registry-backed routing into BridgeService", async () => {
-  const bridgeDir = await makeGitRepo("wcb-runtime-bridge-");
-  const sageDir = await makeGitRepo("wcb-runtime-sage-");
+test("buildProjectBridgeRuntime wires catalog-backed routing into BridgeService", async () => {
+  const { root, projectsByAlias } = await makeProjectsRoot([{ alias: "bridge" }, { alias: "SageTalk" }]);
+  const bridgeDir = projectsByAlias.bridge;
+  const sageDir = projectsByAlias.SageTalk;
   const sessionsDir = mkdtempSync(join(tmpdir(), "wcb-runtime-sessions-"));
   const backend = new FakeBackend({ text: "ok", interrupted: false, codexSessionId: "new-session" });
   const sender = new FakeSender();
-  const config: BridgeConfig = {
-    defaultCwd: bridgeDir,
-    allowlistRoots: [bridgeDir, sageDir],
+  const config = {
+    projectsRoot: root,
     extraWritableRoots: [sageDir],
     streamIntervalMs: 1,
     defaultProject: "bridge",
-    projects: {
-      bridge: { cwd: bridgeDir },
-      SageTalk: { cwd: sageDir },
-    },
-  };
+  } as unknown as BridgeConfig;
 
   try {
     const { bridgeService, projectManager } = await buildProjectBridgeRuntime({
@@ -192,9 +199,74 @@ test("buildProjectBridgeRuntime wires registry-backed routing into BridgeService
     assert.equal(backend.startRequests[0]?.prompt, "run tests");
     assert.deepEqual(backend.startRequests[0]?.extraWritableRoots, [sageDir]);
   } finally {
-    await rm(bridgeDir, { recursive: true, force: true });
-    await rm(sageDir, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
     await rm(sessionsDir, { recursive: true, force: true });
+  }
+});
+
+test("buildProjectBridgeRuntime restores lastProject when it still exists", async () => {
+  const { root } = await makeProjectsRoot([{ alias: "bridge" }, { alias: "SageTalk" }]);
+
+  try {
+    const { projectManager } = await buildProjectBridgeRuntime({
+      account,
+      config: { projectsRoot: root, defaultProject: "bridge", streamIntervalMs: 1, extraWritableRoots: [] } as unknown as BridgeConfig,
+      sender: new FakeSender(),
+      backend: new FakeBackend(),
+      loadRuntimeState: () => ({ lastProject: "SageTalk" }),
+      saveRuntimeState: () => {},
+    });
+
+    assert.equal(projectManager.activeProjectAlias, "SageTalk");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("buildProjectBridgeRuntime falls back to the default project when lastProject no longer exists and remembers it", async () => {
+  const { root } = await makeProjectsRoot([{ alias: "bridge" }]);
+  const savedStates: Array<{ lastProject?: string }> = [];
+
+  try {
+    const { projectManager } = await buildProjectBridgeRuntime({
+      account,
+      config: { projectsRoot: root, defaultProject: "bridge", streamIntervalMs: 1, extraWritableRoots: [] } as unknown as BridgeConfig,
+      sender: new FakeSender(),
+      backend: new FakeBackend(),
+      loadRuntimeState: () => ({ lastProject: "Missing" }),
+      saveRuntimeState: (state) => {
+        savedStates.push(state);
+      },
+    });
+
+    assert.equal(projectManager.activeProjectAlias, "bridge");
+    assert.deepEqual(savedStates, [{ lastProject: "bridge" }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("buildProjectBridgeRuntime persists lastProject on project switches", async () => {
+  const { root } = await makeProjectsRoot([{ alias: "bridge" }, { alias: "SageTalk" }]);
+  const savedStates: Array<{ lastProject?: string }> = [];
+
+  try {
+    const { projectManager } = await buildProjectBridgeRuntime({
+      account,
+      config: { projectsRoot: root, defaultProject: "bridge", streamIntervalMs: 1, extraWritableRoots: [] } as unknown as BridgeConfig,
+      sender: new FakeSender(),
+      backend: new FakeBackend(),
+      loadRuntimeState: () => ({}),
+      saveRuntimeState: (state) => {
+        savedStates.push(state);
+      },
+    });
+
+    await projectManager.setActiveProject("SageTalk");
+
+    assert.deepEqual(savedStates, [{ lastProject: "SageTalk" }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

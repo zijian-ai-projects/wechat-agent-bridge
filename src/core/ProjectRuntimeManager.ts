@@ -1,20 +1,30 @@
 import type { AgentMode } from "../backend/AgentBackend.js";
 import type { AccountData } from "../config/accounts.js";
-import type { ProjectDefinition, ProjectRegistry } from "../config/projects.js";
+import type { DiscoveredProject, ProjectDefinition } from "../config/projects.js";
 import type { ProjectSessionStore } from "../session/projectSessionStore.js";
 import type { ProjectSession } from "../session/types.js";
 import type { AgentService } from "./AgentService.js";
 import { BusyProjectError, ProjectRuntime } from "./ProjectRuntime.js";
 import type { TextSender } from "./types.js";
 
+export interface ProjectCatalogPort {
+  list(): Promise<DiscoveredProject[]>;
+  get(alias: string): Promise<DiscoveredProject | undefined>;
+  resolveInitialProject(defaultProject: string, lastProject?: string): Promise<DiscoveredProject>;
+  init(alias: string): Promise<DiscoveredProject>;
+}
+
 export interface ProjectRuntimeManagerOptions {
   account: Pick<AccountData, "boundUserId">;
-  registry: ProjectRegistry;
+  catalog: ProjectCatalogPort;
   sessionStore: ProjectSessionStore;
   sender: TextSender;
   agentService: AgentService;
   streamIntervalMs: number;
   extraWritableRoots?: string[];
+  initialProjectAlias: string;
+  defaultProjectAlias: string;
+  rememberActiveProject?: (alias: string) => Promise<void> | void;
 }
 
 export interface ManagerRunPromptOptions {
@@ -24,46 +34,65 @@ export interface ManagerRunPromptOptions {
   contextToken: string;
 }
 
-export interface ProjectListEntry extends ProjectDefinition {
+export interface ProjectListEntry extends DiscoveredProject {
   active: boolean;
 }
 
 const VALID_MODES = new Set<AgentMode>(["readonly", "workspace", "yolo"]);
 
+export class ProjectInitRequiredError extends Error {
+  constructor(readonly projectAlias: string) {
+    super(`Project requires git init: ${projectAlias}`);
+    this.name = "ProjectInitRequiredError";
+  }
+}
+
 export class ProjectRuntimeManager {
   private readonly account: Pick<AccountData, "boundUserId">;
-  private readonly registry: ProjectRegistry;
+  private readonly catalog: ProjectCatalogPort;
   private readonly sessionStore: ProjectSessionStore;
   private readonly sender: TextSender;
   private readonly agentService: AgentService;
   private readonly streamIntervalMs: number;
   private readonly extraWritableRoots: string[];
+  private readonly defaultProjectAlias: string;
+  private readonly rememberActiveProject?: (alias: string) => Promise<void> | void;
   private readonly runtimes = new Map<string, ProjectRuntime>();
   private activeAlias: string;
 
   constructor(options: ProjectRuntimeManagerOptions) {
     this.account = options.account;
-    this.registry = options.registry;
+    this.catalog = options.catalog;
     this.sessionStore = options.sessionStore;
     this.sender = options.sender;
     this.agentService = options.agentService;
     this.streamIntervalMs = options.streamIntervalMs;
     this.extraWritableRoots = options.extraWritableRoots ?? [];
-    this.activeAlias = options.registry.defaultAlias;
+    this.activeAlias = options.initialProjectAlias;
+    this.defaultProjectAlias = options.defaultProjectAlias;
+    this.rememberActiveProject = options.rememberActiveProject;
   }
 
   get activeProjectAlias(): string {
     return this.activeAlias;
   }
 
-  setActiveProject(alias: string): ProjectDefinition {
-    const project = this.registry.get(alias);
+  async initializeProject(alias: string): Promise<DiscoveredProject> {
+    const project = await this.catalog.init(alias);
     this.activeAlias = project.alias;
+    await this.rememberActiveProject?.(project.alias);
     return project;
   }
 
-  runtime(alias = this.activeAlias): ProjectRuntime {
-    const project = this.registry.get(this.resolveAlias(alias));
+  async setActiveProject(alias: string): Promise<DiscoveredProject> {
+    const project = await this.requireProject(alias);
+    this.activeAlias = project.alias;
+    await this.rememberActiveProject?.(project.alias);
+    return project;
+  }
+
+  async runtime(alias?: string): Promise<ProjectRuntime> {
+    const project = await this.requireRunnableProject(alias);
     let runtime = this.runtimes.get(project.alias);
     if (!runtime) {
       runtime = new ProjectRuntime({
@@ -81,8 +110,8 @@ export class ProjectRuntimeManager {
   }
 
   async runPrompt(options: ManagerRunPromptOptions): Promise<void> {
-    const alias = this.resolveAlias(options.projectAlias);
-    const runtime = this.runtime(alias);
+    const alias = await this.resolveAlias(options.projectAlias);
+    const runtime = await this.runtime(alias);
     try {
       await runtime.runPrompt({
         prompt: options.prompt,
@@ -101,26 +130,37 @@ export class ProjectRuntimeManager {
   }
 
   async replacePrompt(options: ManagerRunPromptOptions): Promise<void> {
-    const alias = this.resolveAlias(options.projectAlias);
-    const runtime = this.runtime(alias);
+    const alias = await this.resolveAlias(options.projectAlias);
+    const runtime = await this.runtime(alias);
     await runtime.interrupt();
     await this.runPrompt({ ...options, projectAlias: alias });
   }
 
   async interrupt(alias?: string): Promise<void> {
-    await this.runtime(alias).interrupt();
+    const runtime = await this.runtime(alias);
+    await runtime.interrupt();
   }
 
   async interruptAll(): Promise<void> {
-    await Promise.all(this.listProjects().map((project) => this.runtime(project.alias).interrupt()));
+    const projects = await this.listProjects();
+    await Promise.all(
+      projects
+        .filter((project) => project.ready)
+        .map(async (project) => {
+          const runtime = await this.runtime(project.alias);
+          await runtime.interrupt();
+        }),
+    );
   }
 
   async clear(alias?: string): Promise<ProjectSession> {
-    return this.runtime(alias).clear();
+    const runtime = await this.runtime(alias);
+    return runtime.clear();
   }
 
   async session(alias?: string): Promise<ProjectSession> {
-    return this.runtime(alias).session();
+    const runtime = await this.runtime(alias);
+    return runtime.session();
   }
 
   async setMode(alias: string | undefined, mode: AgentMode | string): Promise<ProjectSession> {
@@ -140,11 +180,35 @@ export class ProjectRuntimeManager {
     return session;
   }
 
-  listProjects(): ProjectListEntry[] {
-    return this.registry.list().map((project) => ({ ...project, active: project.alias === this.activeAlias }));
+  async listProjects(): Promise<ProjectListEntry[]> {
+    const projects = await this.catalog.list();
+    return projects.map((project) => ({ ...project, active: project.alias === this.activeAlias }));
   }
 
-  private resolveAlias(alias?: string): string {
-    return this.registry.get(alias ?? this.activeAlias).alias;
+  private async resolveAlias(alias?: string): Promise<string> {
+    return (await this.requireProject(alias)).alias;
+  }
+
+  private async requireProject(alias?: string): Promise<DiscoveredProject> {
+    const requestedAlias = alias ?? this.activeAlias;
+    const project = await this.catalog.get(requestedAlias);
+    if (project) {
+      return project;
+    }
+    if (alias) {
+      throw new Error(`Unknown project: ${alias}`);
+    }
+    const fallback = await this.catalog.resolveInitialProject(this.defaultProjectAlias);
+    this.activeAlias = fallback.alias;
+    await this.rememberActiveProject?.(fallback.alias);
+    return fallback;
+  }
+
+  private async requireRunnableProject(alias?: string): Promise<DiscoveredProject> {
+    const project = await this.requireProject(alias);
+    if (!project.ready) {
+      throw new ProjectInitRequiredError(project.alias);
+    }
+    return project;
   }
 }

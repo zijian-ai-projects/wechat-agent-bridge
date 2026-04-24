@@ -12,7 +12,7 @@ import { ModeService } from "../src/core/ModeService.js";
 import { ProjectRuntimeManager } from "../src/core/ProjectRuntimeManager.js";
 import { SessionService } from "../src/core/SessionService.js";
 import type { AccountData } from "../src/config/accounts.js";
-import { ProjectRegistry, type ProjectDefinition } from "../src/config/projects.js";
+import type { DiscoveredProject, ProjectDefinition } from "../src/config/projects.js";
 import type { ProjectSessionStore } from "../src/session/projectSessionStore.js";
 import type { BridgeSession } from "../src/session/types.js";
 import { MessageItemType, MessageType, type WeixinMessage } from "../src/wechat/types.js";
@@ -133,15 +133,15 @@ class FakeProjectManager {
   replacements: Array<{ projectAlias?: string; prompt: string; toUserId: string; contextToken: string }> = [];
   clears: Array<string | undefined> = [];
 
-  listProjects(): Array<{ alias: string; cwd: string; active: boolean }> {
+  async listProjects(): Promise<Array<{ alias: string; cwd: string; ready: boolean; active: boolean }>> {
     return [
-      { alias: "bridge", cwd: "/tmp/bridge", active: this.activeProjectAlias === "bridge" },
-      { alias: "SageTalk", cwd: "/tmp/sage", active: this.activeProjectAlias === "SageTalk" },
+      { alias: "bridge", cwd: "/tmp/bridge", ready: true, active: this.activeProjectAlias === "bridge" },
+      { alias: "SageTalk", cwd: "/tmp/sage", ready: true, active: this.activeProjectAlias === "SageTalk" },
     ];
   }
 
-  setActiveProject(alias: string): { alias: string; cwd: string } {
-    const project = this.listProjects().find((item) => item.alias === alias);
+  async setActiveProject(alias: string): Promise<{ alias: string; cwd: string; ready: boolean }> {
+    const project = (await this.listProjects()).find((item) => item.alias === alias);
     if (!project) throw new Error(`Unknown project: ${alias}`);
     this.activeProjectAlias = alias;
     return project;
@@ -287,13 +287,29 @@ test("BridgeService clear command clears project session through project manager
 test("BridgeService rejects same-project prompt while busy", async () => {
   const backend = new FakeBackend([]);
   const sender = new MemorySender();
+  const catalog = {
+    async list(): Promise<DiscoveredProject[]> {
+      return [{ alias: "bridge", cwd: "/tmp/bridge", ready: true }];
+    },
+    async get(alias: string): Promise<DiscoveredProject | undefined> {
+      return alias === "bridge" ? { alias: "bridge", cwd: "/tmp/bridge", ready: true } : undefined;
+    },
+    async resolveInitialProject(): Promise<DiscoveredProject> {
+      return { alias: "bridge", cwd: "/tmp/bridge", ready: true };
+    },
+    async init(): Promise<DiscoveredProject> {
+      return { alias: "bridge", cwd: "/tmp/bridge", ready: true };
+    },
+  };
   const manager = new ProjectRuntimeManager({
     account,
-    registry: new ProjectRegistry("bridge", new Map([["bridge", { alias: "bridge", cwd: "/tmp/bridge" }]])),
+    catalog,
     sessionStore: new MemoryProjectSessionStore() as unknown as ProjectSessionStore,
     sender,
     agentService: new AgentService(backend),
     streamIntervalMs: 1,
+    initialProjectAlias: "bridge",
+    defaultProjectAlias: "bridge",
   });
   const bridge = new BridgeService({ account, projectManager: manager, sender });
 
