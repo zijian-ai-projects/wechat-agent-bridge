@@ -147,6 +147,10 @@ class FakeProjectManager {
     return project;
   }
 
+  async initializeProject(alias: string): Promise<{ alias: string; cwd: string; ready: boolean }> {
+    return this.setActiveProject(alias);
+  }
+
   async runPrompt(options: { projectAlias?: string; prompt: string; toUserId: string; contextToken: string }): Promise<void> {
     this.prompts.push(options);
   }

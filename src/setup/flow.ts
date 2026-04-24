@@ -25,12 +25,7 @@ export async function runSetupFlow(deps: SetupFlowDependencies): Promise<string>
   await deps.bindWechat();
 
   const defaultProjectsRoot = deps.currentConfig.projectsRoot ?? join(process.env.CODEX_HOME || join(homedir(), ".codex"), "projects");
-  const projectsRootInput = (await deps.ask(`项目根目录 [${defaultProjectsRoot}]: `)).trim() || defaultProjectsRoot;
-  const projectsRoot = await deps.resolveProjectsRoot(projectsRootInput);
-  const projects = await deps.discoverProjects(projectsRoot);
-  if (projects.length === 0) {
-    throw new Error("项目根目录下没有可用子目录，请先放入项目或重新选择目录。");
-  }
+  const { projectsRoot, projects } = await chooseProjectsRoot(defaultProjectsRoot, deps.ask, deps.resolveProjectsRoot, deps.discoverProjects);
 
   const selected = await chooseDefaultProject(projects, deps.currentConfig.defaultProject, deps.ask);
   if (!selected.ready) {
@@ -50,6 +45,31 @@ export async function runSetupFlow(deps: SetupFlowDependencies): Promise<string>
   return "配置已保存。微信里先发 /project 查看当前项目，也可以用 @ProjectName ... 定向到某个项目。";
 }
 
+async function chooseProjectsRoot(
+  defaultProjectsRoot: string,
+  ask: (prompt: string) => Promise<string>,
+  resolveProjectsRoot: (input: string) => Promise<string>,
+  discoverProjects: (projectsRoot: string) => Promise<DiscoveredProject[]>,
+): Promise<{ projectsRoot: string; projects: DiscoveredProject[] }> {
+  let errorMessage: string | undefined;
+  while (true) {
+    const prompt = errorMessage
+      ? `项目根目录 [${defaultProjectsRoot}]:\n${errorMessage}\n> `
+      : `项目根目录 [${defaultProjectsRoot}]: `;
+    const projectsRootInput = (await ask(prompt)).trim() || defaultProjectsRoot;
+    try {
+      const projectsRoot = await resolveProjectsRoot(projectsRootInput);
+      const projects = await discoverProjects(projectsRoot);
+      if (projects.length > 0) {
+        return { projectsRoot, projects };
+      }
+      errorMessage = "项目根目录下没有可用子目录，请先放入项目或重新选择目录。";
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+}
+
 async function chooseDefaultProject(
   projects: DiscoveredProject[],
   currentDefaultProject: string,
@@ -61,11 +81,17 @@ async function chooseDefaultProject(
     const marker = index === defaultIndex ? " [default]" : "";
     return `${index + 1}. ${project.alias}${suffix}${marker}`;
   });
-  const selection = (await ask(`选择默认项目:\n${lines.join("\n")}\n> `)).trim();
-  const selectedIndex = selection === "" ? defaultIndex : Number.parseInt(selection, 10) - 1;
-  const selected = projects[selectedIndex];
-  if (!selected) {
-    throw new Error("默认项目选择无效。");
+  let errorMessage: string | undefined;
+  while (true) {
+    const prompt = errorMessage
+      ? `选择默认项目:\n${lines.join("\n")}\n${errorMessage}\n> `
+      : `选择默认项目:\n${lines.join("\n")}\n> `;
+    const selection = (await ask(prompt)).trim();
+    const selectedIndex = selection === "" ? defaultIndex : Number.parseInt(selection, 10) - 1;
+    const selected = projects[selectedIndex];
+    if (selected) {
+      return selected;
+    }
+    errorMessage = "默认项目选择无效。请输入列表中的序号。";
   }
-  return selected;
 }

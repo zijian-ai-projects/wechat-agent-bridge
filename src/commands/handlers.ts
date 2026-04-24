@@ -6,12 +6,14 @@ import { expandHome } from "../config/security.js";
 import type { AgentMode } from "../backend/AgentBackend.js";
 import type { ProjectRuntimeManager } from "../core/ProjectRuntimeManager.js";
 import type { BridgeSession, ChatHistoryEntry, ProjectSession } from "../session/types.js";
+import { formatHelpDetail, formatHelpOverview } from "./helpCatalog.js";
 
 export type CommandProjectManager = Pick<
   ProjectRuntimeManager,
   | "activeProjectAlias"
   | "listProjects"
   | "setActiveProject"
+  | "initializeProject"
   | "interrupt"
   | "replacePrompt"
   | "clear"
@@ -19,6 +21,13 @@ export type CommandProjectManager = Pick<
   | "setModel"
   | "session"
 >;
+
+interface ProjectListItem {
+  alias: string;
+  cwd: string;
+  ready: boolean;
+  active: boolean;
+}
 
 export interface CommandContext {
   text: string;
@@ -43,35 +52,36 @@ export class CommandUserError extends Error {
   }
 }
 
-const HELP_TEXT = `可用命令:
-/help              显示帮助
-/project [alias]   查看或切换当前项目
-/interrupt [project]  中断项目任务
-/replace [project] <prompt>  中断并替换项目提示词
-/clear [project]   清除当前或指定项目会话
-/status [project]  查看状态
-/cwd [path]        查看项目目录，或切换到已配置项目目录
-/model [project] [name]      查看或切换模型
-/mode [project] [readonly|workspace|yolo]  切换运行模式
-/history [project] [n]       查看最近 n 条对话
-
-默认模式是 readonly。只有显式执行 /mode yolo 才会启用全权限。`;
-
-export function handleHelp(): CommandResult {
-  return { handled: true, reply: HELP_TEXT };
+export async function handleHelp(args = ""): Promise<CommandResult> {
+  const target = args.trim().toLowerCase();
+  if (!target) {
+    return { handled: true, reply: formatHelpOverview() };
+  }
+  const detail = formatHelpDetail(target);
+  return {
+    handled: true,
+    reply: detail ?? `未知命令: /${target}\n输入 /help 查看可用命令。`,
+  };
 }
 
 export async function handleProject(ctx: CommandContext, args: string): Promise<CommandResult> {
   const manager = requireProjectManager(ctx);
-  const alias = args.trim();
-  if (!alias) {
-    return { handled: true, reply: await formatProjectList(manager) };
+  const trimmed = args.trim();
+  const projects = await manager.listProjects();
+  if (!trimmed) {
+    return { handled: true, reply: formatProjectList(projects, manager.activeProjectAlias) };
   }
-  if (!(await hasProject(manager, alias))) {
-    return unknownProject(alias, manager);
+  const init = trimmed.endsWith(" --init");
+  const alias = init ? trimmed.slice(0, -7).trim() : trimmed;
+  const project = projects.find((item) => item.alias === alias);
+  if (!project) {
+    return unknownProjectFromProjects(alias, projects);
   }
-  const project = await manager.setActiveProject(alias);
-  return { handled: true, reply: `当前项目已切换为: ${project.alias}\n工作目录: ${project.cwd}` };
+  if (!project.ready && !init) {
+    return { handled: true, reply: formatProjectInitReply(alias) };
+  }
+  const switched = project.ready ? await manager.setActiveProject(alias) : await manager.initializeProject(alias);
+  return { handled: true, reply: `当前项目已切换为: ${switched.alias}\n工作目录: ${switched.cwd}` };
 }
 
 export async function handleInterrupt(ctx: CommandContext, args: string): Promise<CommandResult> {
@@ -90,6 +100,15 @@ export async function handleReplace(ctx: CommandContext, args: string): Promise<
   const prompt = parsed.rest.trim();
   if (!prompt) {
     return { handled: true, reply: "用法: /replace [project] <prompt>" };
+  }
+  const projects = await manager.listProjects();
+  const targetAlias = parsed.alias ?? manager.activeProjectAlias;
+  const project = projects.find((item) => item.alias === targetAlias);
+  if (!project) {
+    return unknownProjectFromProjects(targetAlias, projects);
+  }
+  if (!project.ready) {
+    return { handled: true, reply: formatProjectInitReply(project.alias) };
   }
   await manager.replacePrompt({
     ...(parsed.alias ? { projectAlias: parsed.alias } : {}),
@@ -231,12 +250,14 @@ function requireProjectManager(ctx: CommandContext): CommandProjectManager {
   return ctx.projectManager;
 }
 
-async function formatProjectList(manager: CommandProjectManager): Promise<string> {
-  const projects = await manager.listProjects();
+function formatProjectList(projects: ProjectListItem[], activeAlias: string): string {
   return [
     "项目列表:",
-    ...projects.map((project) => `${project.active ? "*" : " "} ${project.alias} - ${project.cwd}`),
-    `当前项目: ${manager.activeProjectAlias}`,
+    ...projects.map(
+      (project) =>
+        `${project.active ? "*" : " "} ${project.alias} - ${project.cwd}${project.ready ? "" : " (未初始化)"}`,
+    ),
+    `当前项目: ${activeAlias}`,
   ].join("\n");
 }
 
@@ -245,7 +266,10 @@ async function hasProject(manager: CommandProjectManager, alias: string): Promis
 }
 
 async function unknownProject(alias: string, manager: CommandProjectManager): Promise<CommandResult> {
-  const projects = await manager.listProjects();
+  return unknownProjectFromProjects(alias, await manager.listProjects());
+}
+
+function unknownProjectFromProjects(alias: string, projects: ProjectListItem[]): CommandResult {
   return {
     handled: true,
     reply: `未知项目: ${alias}\n可用项目: ${projects.map((project) => project.alias).join(", ")}`,
@@ -357,8 +381,7 @@ async function handleProjectCwd(manager: CommandProjectManager, args: string): P
       reply: [
         `当前项目: ${manager.activeProjectAlias}`,
         `当前工作目录: ${active.cwd}`,
-        "已配置项目:",
-        ...projects.map((project) => `${project.active ? "*" : " "} ${project.alias} - ${project.cwd}`),
+        formatProjectList(projects, manager.activeProjectAlias),
       ].join("\n"),
     };
   }
@@ -379,11 +402,18 @@ async function handleProjectCwd(manager: CommandProjectManager, args: string): P
       continue;
     }
     if (projectCwd === resolvedInput) {
+      if (!project.ready) {
+        return { handled: true, reply: formatProjectInitReply(project.alias) };
+      }
       await manager.setActiveProject(project.alias);
       return { handled: true, reply: `当前项目已切换为: ${project.alias}\n工作目录: ${project.cwd}` };
     }
   }
   return { handled: true, reply: `未配置的项目目录: ${resolvedInput}\n/cwd 只能切换到已配置项目的 cwd。` };
+}
+
+export function formatProjectInitReply(alias: string): string {
+  return `项目 ${alias} 还不是 Git 仓库。发送 /project ${alias} --init 初始化并切换。`;
 }
 
 async function handleProjectModel(manager: CommandProjectManager, args: string): Promise<CommandResult> {

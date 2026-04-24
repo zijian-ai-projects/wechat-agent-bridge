@@ -29,22 +29,28 @@ class FakeProjectManager {
   interrupts: Array<string | undefined> = [];
   replacements: Array<{ projectAlias?: string; prompt: string; toUserId: string; contextToken: string }> = [];
   clears: Array<string | undefined> = [];
+  initialized: string[] = [];
   readonly sessions = new Map<string, ProjectSession>();
+  readonly ready = new Map<string, boolean>([
+    ["bridge", true],
+    ["SageTalk", true],
+  ]);
 
   constructor() {
     this.sessions.set("bridge", this.createProjectSession("bridge", "/tmp/bridge"));
     this.sessions.set("SageTalk", this.createProjectSession("SageTalk", "/tmp/sage"));
   }
 
-  addProject(alias: string, cwd: string): void {
+  addProject(alias: string, cwd: string, ready = true): void {
     this.sessions.set(alias, this.createProjectSession(alias, cwd));
+    this.ready.set(alias, ready);
   }
 
   async listProjects(): Promise<Array<{ alias: string; cwd: string; ready: boolean; active: boolean }>> {
     return Array.from(this.sessions.keys()).map((alias) => ({
       alias,
       cwd: this.sessions.get(alias)!.cwd,
-      ready: true,
+      ready: this.ready.get(alias) ?? true,
       active: alias === this.activeProjectAlias,
     }));
   }
@@ -53,7 +59,16 @@ class FakeProjectManager {
     const project = (await this.listProjects()).find((item) => item.alias === alias);
     if (!project) throw new Error(`Unknown project: ${alias}`);
     this.activeProjectAlias = alias;
-    return { alias: project.alias, cwd: project.cwd, ready: true };
+    return { alias: project.alias, cwd: project.cwd, ready: project.ready };
+  }
+
+  async initializeProject(alias: string): Promise<{ alias: string; cwd: string; ready: boolean }> {
+    this.assertProject(alias);
+    this.ready.set(alias, true);
+    this.initialized.push(alias);
+    const session = this.sessions.get(alias)!;
+    this.activeProjectAlias = alias;
+    return { alias, cwd: session.cwd, ready: true };
   }
 
   async interrupt(alias?: string): Promise<void> {
@@ -181,17 +196,36 @@ test("/cwd only switches into allowlist roots", async () => {
   await rm(outside, { recursive: true, force: true });
 });
 
-test("/help includes project commands and keeps yolo warning semantics", async () => {
-  const session = createSession("/tmp");
+test("/help shows only the streamlined overview", async () => {
+  const projectManager = new FakeProjectManager();
 
-  const result = await routeCommand({ text: "/help", session, boundUserId: "user-1" });
+  const result = await routeCommand({ text: "/help", projectManager, boundUserId: "user-1" });
 
   assert.equal(result.handled, true);
-  assert.match(result.reply ?? "", /\/project \[alias\]/);
-  assert.match(result.reply ?? "", /\/interrupt \[project\]/);
-  assert.match(result.reply ?? "", /\/replace \[project\] <prompt>/);
-  assert.match(result.reply ?? "", /readonly/);
-  assert.match(result.reply ?? "", /\/mode yolo/);
+  assert.match(result.reply ?? "", /\/project/);
+  assert.match(result.reply ?? "", /\/replace/);
+  assert.doesNotMatch(result.reply ?? "", /\/cwd/);
+});
+
+test("/help project shows detailed syntax and explicit init guidance", async () => {
+  const projectManager = new FakeProjectManager();
+
+  const result = await routeCommand({ text: "/help project", projectManager, boundUserId: "user-1" });
+
+  assert.equal(result.handled, true);
+  assert.match(result.reply ?? "", /\/project <name>/);
+  assert.match(result.reply ?? "", /--init/);
+  assert.match(result.reply ?? "", /是否会切换当前项目/);
+});
+
+test("/help help shows detailed syntax for command help", async () => {
+  const projectManager = new FakeProjectManager();
+
+  const result = await routeCommand({ text: "/help help", projectManager, boundUserId: "user-1" });
+
+  assert.equal(result.handled, true);
+  assert.match(result.reply ?? "", /\/help/);
+  assert.match(result.reply ?? "", /\/help <command>/);
 });
 
 test("/project lists projects and switches the active project", async () => {
@@ -207,6 +241,20 @@ test("/project lists projects and switches the active project", async () => {
   assert.equal(switched.handled, true);
   assert.equal(projectManager.activeProjectAlias, "SageTalk");
   assert.match(switched.reply ?? "", /SageTalk/);
+});
+
+test("/project requires explicit --init before switching to a non-git child", async () => {
+  const projectManager = new FakeProjectManager();
+  projectManager.addProject("scratch", "/tmp/scratch", false);
+
+  const blocked = await routeCommand({ text: "/project scratch", projectManager, boundUserId: "user-1" });
+  const confirmed = await routeCommand({ text: "/project scratch --init", projectManager, boundUserId: "user-1" });
+
+  assert.equal(blocked.handled, true);
+  assert.match(blocked.reply ?? "", /\/project scratch --init/);
+  assert.deepEqual(projectManager.initialized, ["scratch"]);
+  assert.equal(projectManager.activeProjectAlias, "scratch");
+  assert.match(confirmed.reply ?? "", /当前项目已切换为: scratch/);
 });
 
 test("project commands without a project manager return intentional user-facing errors", async () => {

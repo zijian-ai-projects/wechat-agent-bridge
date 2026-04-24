@@ -7,64 +7,11 @@ Other Languages:
 
 wechat-agent-bridge es un bridge local personal. Escucha mensajes privados de una cuenta de WeChat vinculada, envía los mensajes normales a un coding agent local y devuelve el progreso y el resultado final a WeChat.
 
-Ahora también soporta aliases de proyecto explícitos y sesiones multi‑proyecto. Puedes conectar repos locales como `bridge` y `SageTalk` al mismo bridge de WeChat y mantener por separado el session, history, mode y model de Codex para cada proyecto.
+Ahora también soporta sesiones multi‑proyecto basadas en `projectsRoot`. Puedes colocar repos locales como `wechat-agent-bridge` y `SageTalk` bajo una misma carpeta raíz de proyectos y mantener por separado el session, history, mode y model de Codex para cada proyecto.
 
 No es un bot público ni un servicio compartido para equipos. v1 usa Codex CLI como backend por defecto y sirve solo a un usuario de WeChat vinculado junto con el estado de sesión local de Codex del usuario actual del sistema operativo.
 
-## Ejemplo
-
-En WeChat:
-
-```text
-/status
-```
-
-Respuesta posible:
-
-```text
-Status: idle
-Mode: readonly
-Current directory: /Users/you/projects/app
-Recent session: no active task
-```
-
-Envía una petición normal:
-
-```text
-Revisa por qué fallan los tests de este repo y sugiere una corrección.
-```
-
-El bridge envía ese mensaje como prompt al Codex CLI local. El progreso de Codex se sincroniza con WeChat según el intervalo configurado, y la respuesta final vuelve al mismo chat privado.
-
-Si quieres enviar solo un mensaje a un proyecto concreto, puedes escribir:
-
-```text
-@SageTalk run tests and summarize failures
-```
-
-Ese mensaje se enruta solo al proyecto `SageTalk` y no cambia el proyecto activo actual.
-
-## Instalación y Ejecución
-
-### Requisitos
-
-1. Node.js 20+.
-2. `codex` CLI instalado localmente.
-3. El usuario actual del sistema operativo ha iniciado sesión en Codex CLI.
-
-Inicio de sesión recomendado:
-
-```bash
-codex login
-```
-
-Si el callback del navegador no es cómodo:
-
-```bash
-codex login --device-auth
-```
-
-### Primer plano
+## Inicio Rápido
 
 ```bash
 cd /path/to/wechat-agent-bridge
@@ -73,9 +20,34 @@ npm run setup
 npm run start
 ```
 
-`setup` comprueba Codex CLI, vincula WeChat mediante código QR y guarda el directorio de trabajo por defecto junto con los repo roots permitidos.
+`setup` comprueba el login de Codex, vincula WeChat y pide la carpeta raíz de proyectos junto con el proyecto por defecto.
 
-### Daemon en segundo plano
+Si el callback del navegador no es cómodo, ejecuta primero:
+
+```bash
+codex login --device-auth
+```
+
+## Uso Diario en WeChat
+
+```text
+/project
+/project SageTalk
+@SageTalk run tests and summarize failures
+```
+
+Los mensajes normales sin `@NombreDelProyecto` van al proyecto actual.
+
+Consulta [docs/commands.md](docs/commands.md) para la referencia completa de comandos.
+
+## Reglas del Directorio de Proyectos
+
+- Solo se tratan como proyectos los subdirectorios de primer nivel bajo `projectsRoot`
+- Si colocas un repo nuevo dentro de esa carpeta, aparecerá en `/project`
+- Un directorio que no sea Git debe inicializarse explícitamente con `/project <name> --init`
+- Al arrancar, el bridge intenta restaurar el último proyecto activo; en el primer setup se elige un proyecto por defecto
+
+## Daemon en Segundo Plano
 
 ```bash
 npm run build
@@ -98,52 +70,7 @@ Directorio de datos por defecto:
 
 Puedes cambiarlo con `WECHAT_AGENT_BRIDGE_HOME`. La variable antigua `WECHAT_CODEX_BRIDGE_HOME` todavía se acepta como fallback de compatibilidad.
 
-La configuración, la cuenta, las sesiones y los sync buffers se escriben con permisos `0600`. Los logs se redactan y no deben contener tokens, cookies, cabeceras Authorization ni contenido de archivos auth de Codex.
-
-## Slash Commands
-
-Puedes enviarlos en el chat privado de WeChat vinculado:
-
-- `/help`
-- `/project [alias]`
-- `/interrupt [project]`
-- `/replace [project] <prompt>`
-- `/clear [project]`
-- `/status [project]`
-- `/cwd [path]`
-- `/model [project] [name]`
-- `/mode [project] [readonly|workspace|yolo]`
-- `/history [project] [n]`
-
-`/clear` descarta el antiguo Codex session/thread id, de modo que el siguiente mensaje normal empieza una conversación nueva. Si no se usa `/clear`, los mensajes siguientes prefieren `codex exec resume <SESSION_ID>`.
-
-## Sesiones Multi‑Proyecto
-
-`~/.wechat-agent-bridge/config.json` puede definir aliases de proyecto de forma explícita:
-
-```json
-{
-  "defaultProject": "bridge",
-  "projects": {
-    "bridge": { "cwd": "/Users/you/.codex/projects/wechat-agent-bridge" },
-    "SageTalk": { "cwd": "/Users/you/.codex/projects/SageTalk" }
-  },
-  "extraWritableRoots": [
-    "/Users/you/.codex/projects"
-  ],
-  "streamIntervalMs": 10000
-}
-```
-
-En WeChat:
-
-- `/project` muestra la lista de proyectos configurados y el proyecto activo actual.
-- `/project SageTalk` cambia el proyecto activo a `SageTalk`.
-- `@SageTalk revisa por qué fallan los tests` envía solo ese mensaje a `SageTalk`.
-- `/interrupt SageTalk` interrumpe la tarea actual de `SageTalk`.
-- `/replace SageTalk vuelve a implementarlo siguiendo este plan` interrumpe y reemplaza la tarea actual de `SageTalk`.
-
-Cada proyecto mantiene su propio Codex session, history, mode y model. Distintos proyectos pueden ejecutarse en paralelo. Los mensajes nuevos para el mismo proyecto se rechazan mientras siga ocupado, salvo que uses explícitamente `/interrupt` o `/replace`.
+La configuración, la cuenta, las sesiones, el runtime state y los sync buffers se escriben con permisos `0600`. Los logs se redactan y no deben contener tokens, cookies, cabeceras Authorization ni contenido de archivos auth de Codex.
 
 ## Modos de Codex
 
@@ -159,10 +86,8 @@ Para permitir que `workspace` escriba en directorios hermanos, configura `extraW
 
 ```json
 {
-  "defaultCwd": "/Users/you/projects/wechat-agent-bridge",
-  "allowlistRoots": [
-    "/Users/you/projects/wechat-agent-bridge"
-  ],
+  "projectsRoot": "/Users/you/.codex/projects",
+  "defaultProject": "wechat-agent-bridge",
   "extraWritableRoots": [
     "/Users/you/projects"
   ],
@@ -230,8 +155,8 @@ Hoy el proyecto es Codex-first, pero el core ya está organizado para ser agent-
 - Ignora por defecto grupos, desconocidos, usuarios no vinculados y mensajes de bot.
 - No ofrece multiusuario, colaboración de equipo, bot público ni hosting remoto.
 - El daemon se ejecuta por defecto como el usuario actual del sistema operativo.
-- `setup` y `start` comprueban Codex, el login de Codex, el cwd por defecto y los allowlist roots.
-- `/cwd` solo puede cambiar a Git repo roots permitidos.
+- `setup` y `start` comprueban Codex, el login de Codex y el `projectsRoot` configurado.
+- `/cwd` es un comando de compatibilidad y solo puede cambiar a directorios de proyecto ya configurados.
 - `--skip-git-repo-check` no se activa por defecto.
 
 Estos son valores seguros de v1, no omisiones temporales.
@@ -254,7 +179,7 @@ StreamBuffer sincroniza progreso según el intervalo configurado
 WeChatSender devuelve el resultado
 ```
 
-El MCP server reutiliza los mismos core services. No duplica lógica de negocio ni evita las reglas de allowlist o session.
+El MCP server reutiliza los mismos core services. No duplica lógica de negocio ni evita las reglas de proyecto o session.
 
 ## Estructura del Repositorio
 

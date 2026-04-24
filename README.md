@@ -7,64 +7,11 @@
 
 wechat-agent-bridge 是一个个人本地桥接器：它监听一个绑定微信号的私聊消息，把普通消息交给本机 coding agent 执行，并把进度和结果回传到微信。
 
-它现在支持显式项目别名和多项目会话：你可以把 `bridge`、`SageTalk` 这样的本地仓库都挂到同一个微信桥上，并分别保留各自的 Codex session、history、mode 和 model。
+它现在支持基于 `projectsRoot` 的多项目会话：你可以把 `wechat-agent-bridge`、`SageTalk` 这样的本地仓库放到同一个项目根目录下，并分别保留各自的 Codex session、history、mode 和 model。
 
 它不是公共 bot，也不是团队共享服务。v1 默认使用 Codex CLI 后端，只服务一个绑定微信号和当前系统用户的本机 Codex 登录态。
 
-## 效果示例
-
-微信里发送：
-
-```text
-/status
-```
-
-可能返回：
-
-```text
-状态：idle
-模式：readonly
-当前目录：/Users/you/projects/app
-最近会话：无进行中的任务
-```
-
-微信里发送普通需求：
-
-```text
-帮我看一下这个 repo 的测试为什么失败，并给出修复建议。
-```
-
-bridge 会把这条消息作为 prompt 传给本机 Codex CLI。Codex 的进度会按节流间隔同步到微信，最终结果会回到同一个私聊窗口。
-
-如果只想把某一条消息发给指定项目，可以直接发送：
-
-```text
-@SageTalk run tests and summarize failures
-```
-
-这条消息只会路由到 `SageTalk` 项目，不会切换当前 active project。
-
-## 安装与启动
-
-### 前提
-
-1. Node.js 20+。
-2. 已安装本机 `codex` CLI。
-3. 当前系统用户已经登录 Codex CLI。
-
-推荐先在终端完成：
-
-```bash
-codex login
-```
-
-如果浏览器回调不方便：
-
-```bash
-codex login --device-auth
-```
-
-### 前台运行
+## 3 分钟上手
 
 ```bash
 cd /path/to/wechat-agent-bridge
@@ -73,9 +20,38 @@ npm run setup
 npm run start
 ```
 
-`setup` 会检查 Codex CLI、扫码绑定微信，并保存默认工作目录和 allowlist repo roots。
+`setup` 会完成三件事：
 
-### 后台运行
+1. 检查本机 Codex 登录
+2. 绑定微信
+3. 选择项目根目录和默认项目
+
+如果浏览器回调不方便，可以先在终端完成：
+
+```bash
+codex login --device-auth
+```
+
+## 微信里怎么用
+
+```text
+/project
+/project SageTalk
+@SageTalk 帮我看一下测试失败原因
+```
+
+不带 `@项目名` 的普通消息，会发给当前项目。
+
+完整命令说明见 [docs/commands.md](docs/commands.md)。
+
+## 项目目录规则
+
+- 只读取 `projectsRoot` 下的一级子目录
+- 新项目放进去后就能在 `/project` 里看到
+- 非 Git 目录第一次使用时，需要显式发送 `/project <name> --init`
+- 启动时优先恢复上次使用的项目；第一次运行时由 `setup` 选择默认项目
+
+## 后台 daemon
 
 ```bash
 npm run build
@@ -98,52 +74,7 @@ npm run daemon -- restart
 
 可以用 `WECHAT_AGENT_BRIDGE_HOME` 指定目录。旧的 `WECHAT_CODEX_BRIDGE_HOME` 仍作为兼容 fallback 被接受。
 
-配置、账号、session 和 sync buffer 会以 `0600` 写入。日志会脱敏，不能包含 token、cookie、Authorization header 或 Codex auth 文件内容。
-
-## Slash Commands
-
-微信私聊里可以发送：
-
-- `/help`
-- `/project [alias]`
-- `/interrupt [project]`
-- `/replace [project] <prompt>`
-- `/clear [project]`
-- `/status [project]`
-- `/cwd [path]`
-- `/model [project] [name]`
-- `/mode [project] [readonly|workspace|yolo]`
-- `/history [project] [n]`
-
-`/clear` 会丢弃旧 Codex session/thread id，下次普通消息开启全新会话。非 `/clear` 的继续对话优先使用 `codex exec resume <SESSION_ID>`。
-
-## 多项目会话
-
-`~/.wechat-agent-bridge/config.json` 可以显式配置项目别名：
-
-```json
-{
-  "defaultProject": "bridge",
-  "projects": {
-    "bridge": { "cwd": "/Users/you/.codex/projects/wechat-agent-bridge" },
-    "SageTalk": { "cwd": "/Users/you/.codex/projects/SageTalk" }
-  },
-  "extraWritableRoots": [
-    "/Users/you/.codex/projects"
-  ],
-  "streamIntervalMs": 10000
-}
-```
-
-微信里使用：
-
-- `/project` 查看项目列表和当前 active project。
-- `/project SageTalk` 切换当前项目到 `SageTalk`。
-- `@SageTalk 帮我看测试失败` 只把这一条消息发给 `SageTalk`。
-- `/interrupt SageTalk` 中断 `SageTalk` 当前任务。
-- `/replace SageTalk 重新按这个方案实现` 中断并替换 `SageTalk` 当前任务。
-
-每个项目独立保存 Codex session、history、mode 和 model。不同项目可以并发运行；同一项目正在处理时，新消息会被拒绝，除非显式使用 `/interrupt` 或 `/replace`。
+配置、账号、session、runtime state 和 sync buffer 会以 `0600` 写入。日志会脱敏，不能包含 token、cookie、Authorization header 或 Codex auth 文件内容。
 
 ## Codex 模式
 
@@ -165,10 +96,8 @@ npm run daemon -- restart
 
 ```json
 {
-  "defaultCwd": "/Users/you/projects/wechat-agent-bridge",
-  "allowlistRoots": [
-    "/Users/you/projects/wechat-agent-bridge"
-  ],
+  "projectsRoot": "/Users/you/.codex/projects",
+  "defaultProject": "wechat-agent-bridge",
   "extraWritableRoots": [
     "/Users/you/projects"
   ],
@@ -236,8 +165,8 @@ codex mcp add wechat-agent-bridge -- npm --prefix /ABSOLUTE/PATH/TO/wechat-agent
 - 默认忽略群聊、陌生人、非绑定用户和 bot 消息。
 - 不做多用户共享、团队协作、公共 bot 或远程托管。
 - daemon 默认以当前登录用户身份运行。
-- `setup` 和 `start` 会检查 `codex` 是否存在、Codex 登录态、默认 cwd 和 allowlist。
-- `/cwd` 只能切到 allowlist 中的 Git repo root。
+- `setup` 和 `start` 会检查 `codex` 是否存在、Codex 登录态，以及配置的 `projectsRoot`。
+- `/cwd` 是兼容命令，只能切到已配置项目的目录。
 - 默认不启用 `--skip-git-repo-check`。
 
 这些边界是 v1 的安全默认值，不是临时限制。
@@ -260,7 +189,7 @@ StreamBuffer 节流同步进度
 WeChatSender 回传结果
 ```
 
-MCP server 复用同一组 core services，不复制业务逻辑，也不绕过 allowlist 和 session 规则。
+MCP server 复用同一组 core services，不复制业务逻辑，也不绕过项目和 session 规则。
 
 ## 仓库结构
 

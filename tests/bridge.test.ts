@@ -223,6 +223,29 @@ test("buildProjectBridgeRuntime restores lastProject when it still exists", asyn
   }
 });
 
+test("targeted prompt to a non-git child returns explicit init guidance", async () => {
+  const sender = new FakeSender();
+  const projectManager = {
+    activeProjectAlias: "bridge",
+    listProjects: async () => [
+      { alias: "bridge", cwd: "/tmp/bridge", ready: true, active: true },
+      { alias: "scratch", cwd: "/tmp/scratch", ready: false, active: false },
+    ],
+    runPrompt: async () => {
+      throw new Error("should not run");
+    },
+  };
+  const service = new (await import("../src/core/BridgeService.js")).BridgeService({
+    account,
+    projectManager: projectManager as never,
+    sender,
+  });
+
+  await service.handleMessage(textMessage("user-1", "@scratch run tests"));
+
+  assert.match(sender.messages.join("\n"), /\/project scratch --init/);
+});
+
 test("buildProjectBridgeRuntime falls back to the default project when lastProject no longer exists and remembers it", async () => {
   const { root } = await makeProjectsRoot([{ alias: "bridge" }]);
   const savedStates: Array<{ lastProject?: string }> = [];

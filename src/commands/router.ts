@@ -31,7 +31,7 @@ export async function routeCommand(ctx: CommandContext): Promise<CommandResult> 
   try {
     switch (command) {
       case "help":
-        return handleHelp();
+        return await handleHelp(args);
       case "project":
         return await handleProject(ctx, args);
       case "interrupt":
