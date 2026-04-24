@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { realpath } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { spawnSync } from "node:child_process";
 import { stdin as input, stdout as output } from "node:process";
@@ -10,10 +9,11 @@ import QRCode from "qrcode";
 import { saveAccount } from "../config/accounts.js";
 import { loadConfig, saveConfig } from "../config/config.js";
 import { getDataDir } from "../config/paths.js";
+import { ProjectCatalog, resolveProjectsRootConfig } from "../config/projects.js";
 import { checkCodexInstalled } from "../runtime/codexAvailability.js";
 import { assertCodexLoggedIn, formatCodexLoginGuidance } from "../config/codexAuth.js";
-import { assertGitRepo, resolveAllowedRepoRoot } from "../config/git.js";
 import { startQrLogin, waitForQrScan } from "../wechat/login.js";
+import { runSetupFlow } from "./flow.js";
 
 export async function runSetup(): Promise<void> {
   mkdirSync(getDataDir(), { recursive: true, mode: 0o700 });
@@ -26,29 +26,30 @@ export async function runSetup(): Promise<void> {
   const login = assertCodexLoggedIn();
   console.log(formatCodexLoginGuidance(login));
 
-  const account = await bindWechat();
-  saveAccount(account);
-  console.log(`微信绑定成功，bound user id: ${account.boundUserId}`);
-
   const rl = createInterface({ input, output });
   try {
     const current = loadConfig();
-    const answer = await rl.question(`默认工作目录 [${current.defaultCwd}]: `);
-    const selectedCwd = await realpath(answer.trim() || current.defaultCwd);
-    const defaultCwd = await assertGitRepo(selectedCwd);
-    const rootsAnswer = await rl.question(`允许切换的 Git repo roots，逗号分隔 [${defaultCwd}]: `);
-    const roots = (rootsAnswer.trim() ? rootsAnswer.split(",") : [defaultCwd]).map((root) => root.trim()).filter(Boolean);
-    const allowlistRoots = await Promise.all(
-      roots.map(async (root) => assertGitRepo(await realpath(root))),
-    );
-    await resolveAllowedRepoRoot(defaultCwd, allowlistRoots);
-    saveConfig({
-      defaultCwd,
-      allowlistRoots,
-      extraWritableRoots: current.extraWritableRoots,
-      streamIntervalMs: current.streamIntervalMs,
+    const message = await runSetupFlow({
+      currentConfig: current,
+      bindWechat: async () => {
+        const account = await bindWechat();
+        saveAccount(account);
+        console.log(`微信绑定成功，bound user id: ${account.boundUserId}`);
+        return { boundUserId: account.boundUserId };
+      },
+      ask: (prompt) => rl.question(prompt),
+      resolveProjectsRoot: async (projectsRootInput) =>
+        (await resolveProjectsRootConfig({ ...current, projectsRoot: projectsRootInput })).projectsRoot,
+      discoverProjects: async (projectsRoot) => new ProjectCatalog(projectsRoot).list(),
+      saveConfig,
+      initGitRepo: async (cwd) => {
+        const result = spawnSync("git", ["init", cwd], { encoding: "utf8" });
+        if (result.status !== 0) {
+          throw new Error(`git init 失败: ${result.stderr.trim() || result.stdout.trim()}`);
+        }
+      },
     });
-    console.log("配置已保存。运行 npm run start 前台启动，或 npm run daemon -- start 后台启动。");
+    console.log(message);
   } finally {
     rl.close();
   }
