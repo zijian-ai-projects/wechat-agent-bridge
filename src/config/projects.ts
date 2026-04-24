@@ -1,9 +1,10 @@
-import { realpath } from "node:fs/promises";
-import { basename, isAbsolute, normalize, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { readdir, realpath } from "node:fs/promises";
+import { basename, dirname, isAbsolute, normalize, resolve } from "node:path";
 
-import { assertGitRepo } from "./git.js";
+import { assertGitRepo, findGitRoot } from "./git.js";
 import { expandHome } from "./security.js";
-import type { ProjectConfigEntry } from "./config.js";
+import type { BridgeConfig, ProjectConfigEntry } from "./config.js";
 
 const PROJECT_ALIAS_RE = /^[A-Za-z0-9_-]+$/;
 
@@ -15,6 +16,10 @@ export interface ProjectConfigShape {
 export interface ProjectDefinition {
   alias: string;
   cwd: string;
+}
+
+export interface DiscoveredProject extends ProjectDefinition {
+  ready: boolean;
 }
 
 export class ProjectRegistry {
@@ -103,6 +108,82 @@ export async function resolveProjectRegistry(config: ProjectConfigShape): Promis
   return new ProjectRegistry(defaultAlias, projectsByAlias);
 }
 
+export class ProjectCatalog {
+  constructor(readonly projectsRoot: string) {}
+
+  async list(): Promise<DiscoveredProject[]> {
+    const entries = await readdir(this.projectsRoot, { withFileTypes: true });
+    const projects = await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map(async (entry) => {
+          const cwd = await realpath(resolve(this.projectsRoot, entry.name));
+          const gitRoot = await findGitRoot(cwd);
+          return {
+            alias: entry.name,
+            cwd,
+            ready: gitRoot === cwd,
+          };
+        }),
+    );
+    return projects.sort((a, b) => a.alias.localeCompare(b.alias));
+  }
+
+  async get(alias: string): Promise<DiscoveredProject | undefined> {
+    return (await this.list()).find((project) => project.alias === alias);
+  }
+
+  async resolveInitialProject(defaultProject: string, lastProject?: string): Promise<DiscoveredProject> {
+    const projects = await this.list();
+    for (const alias of [lastProject, defaultProject]) {
+      if (!alias) continue;
+      const project = projects.find((item) => item.alias === alias);
+      if (project) return project;
+    }
+    throw new Error("未找到可用项目，请重新运行 npm run setup");
+  }
+
+  async init(alias: string): Promise<DiscoveredProject> {
+    const project = await this.get(alias);
+    if (!project) {
+      throw new Error(`Unknown project: ${alias}`);
+    }
+    const result = spawnSync("git", ["init", project.cwd], { encoding: "utf8" });
+    if (result.status !== 0) {
+      throw new Error(`git init 失败: ${result.stderr.trim() || result.stdout.trim()}`);
+    }
+    const refreshed = await this.get(alias);
+    if (!refreshed?.ready) {
+      throw new Error(`git init 未成功初始化项目: ${alias}`);
+    }
+    return refreshed;
+  }
+}
+
+export async function resolveProjectsRootConfig(config: BridgeConfig): Promise<{ projectsRoot: string; defaultProject: string }> {
+  if (config.projectsRoot) {
+    return {
+      projectsRoot: await resolveProjectCwd(config.projectsRoot),
+      defaultProject: config.defaultProject,
+    };
+  }
+
+  const projects = config.projects ?? {};
+  if (Object.keys(projects).length === 0) {
+    throw new Error("未配置 projectsRoot，请运行 npm run setup");
+  }
+
+  await assertLegacyProjectRoots(projects);
+  const parents = [...new Set((await Promise.all(Object.values(projects).map((project) => resolveProjectCwd(project.cwd)))).map((cwd) => dirname(cwd)))];
+  if (parents.length !== 1) {
+    throw new Error("旧配置跨越多个项目根目录，请运行 npm run setup");
+  }
+  return {
+    projectsRoot: parents[0],
+    defaultProject: config.defaultProject || basename(Object.values(projects)[0].cwd),
+  };
+}
+
 function sanitizeLegacyProjectAlias(input: string): string {
   const alias = input.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
   return alias || "project";
@@ -112,4 +193,16 @@ async function resolveProjectCwd(inputPath: string): Promise<string> {
   const expanded = expandHome(inputPath.trim());
   const absolute = isAbsolute(expanded) ? normalize(expanded) : resolve(process.cwd(), expanded);
   return realpath(absolute);
+}
+
+async function assertLegacyProjectRoots(projects: Record<string, ProjectConfigEntry>): Promise<void> {
+  await Promise.all(
+    Object.entries(projects).map(async ([alias, project]) => {
+      const cwd = await resolveProjectCwd(project.cwd);
+      const gitRoot = await assertGitRepo(cwd);
+      if (gitRoot !== cwd) {
+        throw new Error(`Legacy project ${alias} must stay at a Git repo root: ${cwd}`);
+      }
+    }),
+  );
 }

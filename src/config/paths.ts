@@ -19,6 +19,10 @@ export function getConfigPath(): string {
   return join(getDataDir(), "config.json");
 }
 
+export function getRuntimeStatePath(): string {
+  return join(getDataDir(), "runtime-state.json");
+}
+
 export function getSyncBufferPath(): string {
   return join(getDataDir(), "sync-buffer.txt");
 }

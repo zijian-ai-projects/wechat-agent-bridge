@@ -8,7 +8,13 @@ import assert from "node:assert/strict";
 import { loadConfig } from "../src/config/config.js";
 import { getConfigPath } from "../src/config/paths.js";
 import { saveSecureJson } from "../src/config/secureStore.js";
-import { createLegacyProjects, resolveProjectRegistry, validateProjectAlias } from "../src/config/projects.js";
+import {
+  ProjectCatalog,
+  createLegacyProjects,
+  resolveProjectRegistry,
+  resolveProjectsRootConfig,
+  validateProjectAlias,
+} from "../src/config/projects.js";
 
 async function makeGitRepo(prefix: string): Promise<string> {
   const dir = await realpath(mkdtempSync(join(tmpdir(), prefix)));
@@ -46,6 +52,36 @@ test("validateProjectAlias accepts safe aliases and rejects path-like aliases", 
   assert.equal(validateProjectAlias("bridge-main"), "bridge-main");
   assert.throws(() => validateProjectAlias("../escape"), /Invalid project alias/);
   assert.throws(() => validateProjectAlias("bad name"), /Invalid project alias/);
+});
+
+test("loadConfig preserves the new projectsRoot config shape and resolves the default cwd", async () => {
+  await withTempConfigHome(async () => {
+    const root = await realpath(mkdtempSync(join(tmpdir(), "wcb-root-")));
+    const bridge = join(root, "bridge");
+    const sage = join(root, "SageTalk");
+    mkdirSync(join(bridge, ".git"), { recursive: true });
+    mkdirSync(join(sage, ".git"), { recursive: true });
+    await writeFile(join(bridge, ".git", "HEAD"), "ref: refs/heads/main\n");
+    await writeFile(join(sage, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    try {
+      saveSecureJson(getConfigPath(), {
+        projectsRoot: root,
+        defaultProject: "SageTalk",
+        streamIntervalMs: 2500,
+      });
+
+      const config = loadConfig();
+      assert.equal(config.projectsRoot, root);
+      assert.equal(config.defaultProject, "SageTalk");
+      assert.equal(config.streamIntervalMs, 2500);
+      assert.equal(config.defaultCwd, sage);
+      assert.deepEqual(config.allowlistRoots, [sage]);
+      assert.deepEqual(config.extraWritableRoots, []);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 test("loadConfig preserves an explicit defaultProject even when it is invalid", async () => {
@@ -229,5 +265,105 @@ test("resolveProjectRegistry rejects missing, non-root, and nonexistent project 
     );
   } finally {
     await rm(bridge, { recursive: true, force: true });
+  }
+});
+
+test("project catalog lists only first-level child directories and marks git readiness", async () => {
+  const root = await realpath(mkdtempSync(join(tmpdir(), "wcb-project-root-")));
+  const bridge = join(root, "bridge");
+  const scratch = join(root, "scratch");
+  const nestedParent = join(root, "nested");
+  const nestedRepo = join(nestedParent, "inner");
+  mkdirSync(join(bridge, ".git"), { recursive: true });
+  await writeFile(join(bridge, ".git", "HEAD"), "ref: refs/heads/main\n");
+  mkdirSync(scratch, { recursive: true });
+  mkdirSync(join(nestedRepo, ".git"), { recursive: true });
+  await writeFile(join(nestedRepo, ".git", "HEAD"), "ref: refs/heads/main\n");
+  await writeFile(join(root, "README.txt"), "ignore me\n");
+
+  try {
+    const catalog = new ProjectCatalog(root);
+    const projects = await catalog.list();
+    assert.deepEqual(
+      projects.map((project) => ({ alias: project.alias, ready: project.ready })),
+      [
+        { alias: "bridge", ready: true },
+        { alias: "nested", ready: false },
+        { alias: "scratch", ready: false },
+      ],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveProjectsRootConfig prefers explicit projectsRoot and infers it from legacy config", async () => {
+  const root = await realpath(mkdtempSync(join(tmpdir(), "wcb-legacy-root-")));
+  const bridge = join(root, "bridge");
+  const sage = join(root, "SageTalk");
+  mkdirSync(join(bridge, ".git"), { recursive: true });
+  mkdirSync(join(sage, ".git"), { recursive: true });
+  await writeFile(join(bridge, ".git", "HEAD"), "ref: refs/heads/main\n");
+  await writeFile(join(sage, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+  try {
+    const explicit = await resolveProjectsRootConfig({
+      projectsRoot: root,
+      defaultProject: "SageTalk",
+      defaultCwd: sage,
+      allowlistRoots: [sage],
+      extraWritableRoots: [],
+      streamIntervalMs: 10_000,
+      projects: undefined,
+    });
+    assert.equal(explicit.projectsRoot, root);
+    assert.equal(explicit.defaultProject, "SageTalk");
+
+    const inferred = await resolveProjectsRootConfig({
+      defaultProject: "SageTalk",
+      defaultCwd: sage,
+      allowlistRoots: [sage],
+      extraWritableRoots: [],
+      streamIntervalMs: 10_000,
+      projects: {
+        bridge: { cwd: bridge },
+        SageTalk: { cwd: sage },
+      },
+    });
+    assert.equal(inferred.projectsRoot, root);
+    assert.equal(inferred.defaultProject, "SageTalk");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveProjectsRootConfig rejects legacy config that spans multiple parents", async () => {
+  const rootA = await realpath(mkdtempSync(join(tmpdir(), "wcb-root-a-")));
+  const rootB = await realpath(mkdtempSync(join(tmpdir(), "wcb-root-b-")));
+  const bridge = join(rootA, "bridge");
+  const sage = join(rootB, "SageTalk");
+  mkdirSync(join(bridge, ".git"), { recursive: true });
+  mkdirSync(join(sage, ".git"), { recursive: true });
+  await writeFile(join(bridge, ".git", "HEAD"), "ref: refs/heads/main\n");
+  await writeFile(join(sage, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+  try {
+    await assert.rejects(
+      resolveProjectsRootConfig({
+        defaultProject: "bridge",
+        defaultCwd: bridge,
+        allowlistRoots: [bridge],
+        extraWritableRoots: [],
+        streamIntervalMs: 10_000,
+        projects: {
+          bridge: { cwd: bridge },
+          SageTalk: { cwd: sage },
+        },
+      }),
+      /npm run setup/i,
+    );
+  } finally {
+    await rm(rootA, { recursive: true, force: true });
+    await rm(rootB, { recursive: true, force: true });
   }
 });
