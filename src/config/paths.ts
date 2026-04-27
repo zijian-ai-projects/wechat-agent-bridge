@@ -31,6 +31,10 @@ export function getPidPath(): string {
   return join(getDataDir(), `${APP_NAME}.pid`);
 }
 
+export function getAttachSocketPath(): string {
+  return join(getDataDir(), "bridge.sock");
+}
+
 export function getDaemonLogPath(): string {
   return join(getDataDir(), "logs", "daemon.log");
 }
