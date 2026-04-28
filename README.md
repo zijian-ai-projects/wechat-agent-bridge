@@ -148,6 +148,29 @@ codex mcp add wechat-agent-bridge -- npm --prefix /ABSOLUTE/PATH/TO/wechat-agent
 
 详见 [docs/mcp.md](docs/mcp.md)。
 
+## 桌面同步终端
+
+启动 daemon 后，可以在电脑终端连接同一个 bridge runtime：
+
+```bash
+wechat-agent-bridge attach
+wechat-agent-bridge attach SageTalk
+```
+
+普通输入会作为当前项目 prompt 执行。以 `:` 开头的是本地控制命令：
+
+```text
+:status
+:project SageTalk
+:model
+:model gpt-5.5
+:models
+:interrupt
+:replace 重新按这个方向做
+```
+
+微信发起的任务会同步显示在 attach 终端；attach 发起的任务会同步显示到微信。两端共享同一个项目 session、mode、model 和运行中 turn。
+
 ## 平台支持
 
 当前是 Codex-first，但 core 已经按 agent-ready 方向拆分：

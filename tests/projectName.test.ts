@@ -52,3 +52,23 @@ test("integration manifests use the agent bridge namespace", () => {
   assert.match(mcpTemplate, new RegExp(PROJECT_NAME));
   assert.doesNotMatch(mcpTemplate, new RegExp(OLD_PROJECT_NAME));
 });
+
+test("documentation covers attach cli and model catalog commands", () => {
+  const readme = readFileSync("README.md", "utf8");
+  assert.match(readme, /## 桌面同步终端/);
+  assert.match(readme, /wechat-agent-bridge attach SageTalk/);
+  assert.match(readme, /:models/);
+
+  const commands = readFileSync("docs/commands.md", "utf8");
+  assert.match(commands, /## \/models/);
+  assert.match(commands, /codex debug models/);
+  assert.match(commands, /模型来源可能是项目 override、Codex config 或 Codex CLI default/);
+
+  const integrations = readFileSync("docs/integrations.md", "utf8");
+  assert.match(integrations, /wechat-agent-bridge attach <project>/);
+  assert.match(integrations, /not the official Codex TUI/);
+
+  const skill = readFileSync("integrations/codex/plugin/skills/wechat-agent-bridge/SKILL.md", "utf8");
+  assert.match(skill, /wechat-agent-bridge attach \[project\]/);
+  assert.match(skill, /\/models` and `:models/);
+});

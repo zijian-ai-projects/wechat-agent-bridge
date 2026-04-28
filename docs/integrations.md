@@ -32,6 +32,15 @@ codex plugin marketplace add <source>
 
 The local CLI does not currently expose `codex plugin create`, `codex plugin install`, or `codex plugin marketplace list`, so the integration is a plugin scaffold plus MCP registration instructions.
 
+Desktop mirroring is exposed by the project binary:
+
+```bash
+wechat-agent-bridge attach
+wechat-agent-bridge attach <project>
+```
+
+This is a companion terminal frontend, not the official Codex TUI attaching to a bridge-managed process.
+
 ## Claude
 
 Status: template and mapping only.
