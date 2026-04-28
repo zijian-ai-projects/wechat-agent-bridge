@@ -15,12 +15,17 @@ test("buildAttachTerminalLaunch opens a Windows cmd attach window in the project
   });
 
   assert.equal(launch?.command, "cmd.exe");
-  assert.deepEqual(launch?.args, [
-    "/d",
-    "/s",
-    "/c",
-    'start "" /D "C:\\Projects\\wechat-agent-bridge" cmd.exe /k "npm run attach"',
-  ]);
+  assert.deepEqual(launch?.args, ["/d", "/s", "/k", "npm run attach"]);
+});
+
+test("buildAttachTerminalLaunch quotes Windows project names for cmd", () => {
+  const launch = buildAttachTerminalLaunch({
+    platform: "win32",
+    cwd: "C:\\Projects\\wechat-agent-bridge",
+    project: "SageTalk",
+  });
+
+  assert.deepEqual(launch?.args, ["/d", "/s", "/k", 'npm run attach -- "SageTalk"']);
 });
 
 test("auto attach launch can be disabled for background daemon starts", () => {

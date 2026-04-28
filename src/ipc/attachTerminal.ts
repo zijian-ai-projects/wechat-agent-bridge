@@ -72,20 +72,16 @@ export function buildAttachTerminalLaunch(options: {
   platform: NodeJS.Platform;
   project?: string;
 }): AttachTerminalLaunch | undefined {
-  const attachCommand = formatNpmAttachCommand(options.project);
   switch (options.platform) {
     case "win32":
+      const windowsAttachCommand = formatNpmAttachCommand(options.project, quoteCmdArg);
       return {
         command: "cmd.exe",
-        args: [
-          "/d",
-          "/s",
-          "/c",
-          `start "" /D ${quoteCmdArg(options.cwd)} cmd.exe /k ${quoteCmdArg(attachCommand)}`,
-        ],
-        displayCommand: attachCommand,
+        args: ["/d", "/s", "/k", windowsAttachCommand],
+        displayCommand: windowsAttachCommand,
       };
     case "darwin": {
+      const attachCommand = formatNpmAttachCommand(options.project, quoteShellArg);
       const shellCommand = `cd ${quoteShellArg(options.cwd)} && ${attachCommand}`;
       return {
         command: "osascript",
@@ -96,6 +92,7 @@ export function buildAttachTerminalLaunch(options: {
     case "linux":
     case "freebsd":
     case "openbsd": {
+      const attachCommand = formatNpmAttachCommand(options.project, quoteShellArg);
       const shellCommand = `cd ${quoteShellArg(options.cwd)} && ${attachCommand}; exec \${SHELL:-sh}`;
       return {
         command: "x-terminal-emulator",
@@ -108,9 +105,9 @@ export function buildAttachTerminalLaunch(options: {
   }
 }
 
-function formatNpmAttachCommand(project?: string): string {
+function formatNpmAttachCommand(project: string | undefined, quoteProject: (value: string) => string): string {
   if (!project) return "npm run attach";
-  return `npm run attach -- ${quoteShellArg(project)}`;
+  return `npm run attach -- ${quoteProject(project)}`;
 }
 
 function quoteCmdArg(value: string): string {
