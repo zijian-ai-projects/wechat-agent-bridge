@@ -124,19 +124,23 @@ export class ProjectRuntimeManager {
     const alias = await this.resolveAlias(options.projectAlias);
     const runtime = await this.runtime(alias);
     try {
-      await this.eventBus.publish({
-        type: "user_message",
-        source: options.source ?? "wechat",
-        project: alias,
-        text: options.prompt,
-        timestamp: nowIso(),
-      });
       await runtime.runPrompt({
         prompt: options.prompt,
         toUserId: options.toUserId,
         contextToken: options.contextToken,
         isActive: () => alias === this.activeAlias,
         source: options.source,
+        onAccepted: () => {
+          void this.eventBus
+            .publish({
+              type: "user_message",
+              source: options.source ?? "wechat",
+              project: alias,
+              text: options.prompt,
+              timestamp: nowIso(),
+            })
+            .catch(() => undefined);
+        },
       });
     } catch (error) {
       if (!(error instanceof BusyProjectError)) throw error;

@@ -8,7 +8,7 @@ import type { ProjectSessionStore } from "../session/projectSessionStore.js";
 import type { ProjectSession } from "../session/types.js";
 import type { AgentService } from "./AgentService.js";
 import { NullEventBus, nowIso, type BridgeEventBus, type BridgePromptSource } from "./EventBus.js";
-import { ModelService } from "./ModelService.js";
+import { ModelService, type ModelState } from "./ModelService.js";
 import type { TextSender } from "./types.js";
 
 export class BusyProjectError extends Error {
@@ -36,9 +36,11 @@ export interface ProjectRunPromptOptions {
   contextToken: string;
   isActive: () => boolean;
   source?: BridgePromptSource;
+  onAccepted?: () => void;
 }
 
 const LIFECYCLE_EVENT_TYPES = new Set(["turn.started", "turn.completed", "turn.failed"]);
+const FALLBACK_MODEL_STATE: ModelState = { effectiveModel: "Codex CLI default", source: "unresolved" };
 
 export class ProjectRuntime {
   readonly executionKey: string;
@@ -82,6 +84,7 @@ export class ProjectRuntime {
     session.activeTurnId = turnId;
     this.sessionStore.addHistory(session, "user", options.prompt);
     await this.sessionStore.save(session);
+    options.onAccepted?.();
 
     const prefix = `[${this.project.alias}] `;
     const stream = new StreamBuffer({
@@ -92,9 +95,10 @@ export class ProjectRuntime {
       },
     });
 
+    let rethrowAfterFailureEvent = false;
     try {
-      const modelState = await this.modelService.describeSession(session);
-      await this.eventBus.publish({
+      const modelState = await this.describeModelState(session);
+      this.publishEvent({
         type: "turn_started",
         source: options.source ?? "wechat",
         project: this.project.alias,
@@ -124,7 +128,7 @@ export class ProjectRuntime {
               session.codexThreadId = id;
             }
             if (!formatted) return;
-            await this.eventBus.publish({
+            this.publishEvent({
               type: "codex_event",
               project: this.project.alias,
               text: formatted,
@@ -152,36 +156,49 @@ export class ProjectRuntime {
       if (result.interrupted) return;
       if (result.text) {
         this.sessionStore.addHistory(session, "assistant", result.text);
-        await this.eventBus.publish({
+        if (!options.isActive()) {
+          try {
+            await this.sendWithDynamicPrefix(options, prefix, `最终结果:\n${result.text}`);
+          } catch (error) {
+            rethrowAfterFailureEvent = true;
+            throw error;
+          }
+        }
+        this.publishEvent({
           type: "turn_completed",
           project: this.project.alias,
           text: result.text,
           timestamp: nowIso(),
         });
-        if (!options.isActive()) await this.sendWithDynamicPrefix(options, prefix, `最终结果:\n${result.text}`);
         return;
       }
-      await this.sendWithDynamicPrefix(options, prefix, "Codex 本轮无文本返回。");
+      try {
+        await this.sendWithDynamicPrefix(options, prefix, "Codex 本轮无文本返回。");
+      } catch (error) {
+        rethrowAfterFailureEvent = true;
+        throw error;
+      }
+      this.publishEvent({ type: "turn_completed", project: this.project.alias, timestamp: nowIso() });
     } catch (error) {
       if (session.activeTurnId !== turnId) return;
       const message = error instanceof Error ? error.message : String(error);
       logger.error("Project Codex turn failed", { projectAlias: this.project.alias, error: message });
-      await this.sendWithDynamicPrefix(options, prefix, `Codex 处理失败: ${message}`);
-      await this.eventBus.publish({ type: "turn_failed", project: this.project.alias, message, timestamp: nowIso() });
+      try {
+        await this.sendWithDynamicPrefix(options, prefix, `Codex 处理失败: ${message}`);
+      } catch (sendError) {
+        logger.warn("Failed to send project failure message", {
+          projectAlias: this.project.alias,
+          error: sendError instanceof Error ? sendError.message : String(sendError),
+        });
+      }
+      this.publishEvent({ type: "turn_failed", project: this.project.alias, message, timestamp: nowIso() });
+      if (rethrowAfterFailureEvent) throw error;
     } finally {
       if (session.activeTurnId === turnId) {
         session.state = "idle";
         session.activeTurnId = undefined;
         await this.sessionStore.save(session);
-        const finalModelState = await this.modelService.describeSession(session);
-        await this.eventBus.publish({
-          type: "state",
-          project: this.project.alias,
-          state: session.state,
-          model: finalModelState.effectiveModel,
-          modelSource: finalModelState.source,
-          timestamp: nowIso(),
-        });
+        await this.publishState(session);
       }
     }
   }
@@ -197,6 +214,7 @@ export class ProjectRuntime {
       session.state = "idle";
       session.activeTurnId = undefined;
       await this.sessionStore.save(session);
+      await this.publishState(session);
       await this.agentService.interrupt(this.executionKey);
     })();
     this.interruptPromise = interruptPromise;
@@ -216,6 +234,36 @@ export class ProjectRuntime {
 
   private async sendWithDynamicPrefix(options: ProjectRunPromptOptions, prefix: string, text: string): Promise<void> {
     await this.sender.sendText(options.toUserId, options.contextToken, options.isActive() ? text : prefixLines(prefix, text));
+  }
+
+  private publishEvent(event: Parameters<BridgeEventBus["publish"]>[0]): void {
+    void this.eventBus.publish(event).catch((error) => {
+      logger.warn("Bridge event publication failed", { error: error instanceof Error ? error.message : String(error) });
+    });
+  }
+
+  private async describeModelState(session: Pick<ProjectSession, "model">): Promise<ModelState> {
+    try {
+      return await this.modelService.describeSession(session);
+    } catch (error) {
+      logger.warn("Unable to resolve model state for bridge event", {
+        projectAlias: this.project.alias,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return FALLBACK_MODEL_STATE;
+    }
+  }
+
+  private async publishState(session: ProjectSession): Promise<void> {
+    const modelState = await this.describeModelState(session);
+    this.publishEvent({
+      type: "state",
+      project: this.project.alias,
+      state: session.state,
+      model: modelState.effectiveModel,
+      modelSource: modelState.source,
+      timestamp: nowIso(),
+    });
   }
 }
 

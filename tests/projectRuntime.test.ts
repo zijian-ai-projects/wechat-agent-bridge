@@ -367,6 +367,128 @@ test("ProjectRuntimeManager publishes user and turn events", async () => {
   assert.equal(state?.state, "idle");
 });
 
+test("runtime events use fallback model state when model lookup fails", async () => {
+  const events: BridgeEvent[] = [];
+  const { manager, backend } = makeManager({
+    eventBus: {
+      publish: async (event) => {
+        events.push(event);
+      },
+      subscribe: () => () => undefined,
+    },
+    modelService: {
+      describeSession: async () => {
+        throw new Error("model unavailable");
+      },
+    },
+  });
+  backend.enqueue({ text: "done" });
+
+  await manager.runPrompt({ projectAlias: "bridge", prompt: "hi", toUserId: "user-1", contextToken: "ctx" });
+
+  assert.equal(backend.startRequests.length, 1);
+  const turnStarted = events.find((event) => event.type === "turn_started");
+  const state = events.find((event) => event.type === "state");
+  assert.equal(turnStarted?.type, "turn_started");
+  assert.equal(turnStarted?.model, "Codex CLI default");
+  assert.equal(turnStarted?.modelSource, "unresolved");
+  assert.equal(state?.type, "state");
+  assert.equal(state?.model, "Codex CLI default");
+  assert.equal(state?.modelSource, "unresolved");
+});
+
+test("busy-rejected prompts do not publish phantom user messages", async () => {
+  const events: BridgeEvent[] = [];
+  const { manager, backend } = makeManager({
+    eventBus: {
+      publish: async (event) => {
+        events.push(event);
+      },
+      subscribe: () => () => undefined,
+    },
+  });
+  backend.enqueue({ text: "done", waitForRelease: "bridge" });
+
+  const first = manager.runPrompt({ projectAlias: "bridge", prompt: "first", toUserId: "user-1", contextToken: "ctx" });
+  await waitFor(() => backend.startRequests.length === 1);
+  await manager.runPrompt({ projectAlias: "bridge", prompt: "second", toUserId: "user-1", contextToken: "ctx" });
+
+  assert.deepEqual(
+    events.filter((event) => event.type === "user_message").map((event) => (event.type === "user_message" ? event.text : "")),
+    ["first"],
+  );
+
+  backend.release("bridge");
+  await first;
+});
+
+test("interrupt publishes an idle state event", async () => {
+  const events: BridgeEvent[] = [];
+  const { manager, backend } = makeManager({
+    eventBus: {
+      publish: async (event) => {
+        events.push(event);
+      },
+      subscribe: () => () => undefined,
+    },
+  });
+  backend.enqueue({ text: "old result", waitForRelease: "bridge" });
+
+  const run = manager.runPrompt({ projectAlias: "bridge", prompt: "old", toUserId: "user-1", contextToken: "ctx" });
+  await waitFor(() => events.some((event) => event.type === "turn_started"));
+  await manager.interrupt("bridge");
+
+  assert.ok(events.some((event) => event.type === "state" && event.state === "idle"));
+
+  backend.release("bridge");
+  await run;
+});
+
+test("background delivery failure publishes only a failed terminal event", async () => {
+  const events: BridgeEvent[] = [];
+  const { manager, backend, sender } = makeManager({
+    eventBus: {
+      publish: async (event) => {
+        events.push(event);
+      },
+      subscribe: () => () => undefined,
+    },
+  });
+  sender.sendText = async () => {
+    throw new Error("wechat down");
+  };
+  backend.enqueue({ text: "done" });
+
+  await assert.rejects(
+    manager.runPrompt({ projectAlias: "SageTalk", prompt: "background", toUserId: "user-1", contextToken: "ctx" }),
+    /wechat down/,
+  );
+
+  assert.deepEqual(
+    events.filter((event) => event.type === "turn_completed" || event.type === "turn_failed").map((event) => event.type),
+    ["turn_failed"],
+  );
+});
+
+test("successful no-text turns publish completion without text", async () => {
+  const events: BridgeEvent[] = [];
+  const { manager, backend } = makeManager({
+    eventBus: {
+      publish: async (event) => {
+        events.push(event);
+      },
+      subscribe: () => () => undefined,
+    },
+  });
+  backend.enqueue({ text: "" });
+
+  await manager.runPrompt({ projectAlias: "bridge", prompt: "empty", toUserId: "user-1", contextToken: "ctx" });
+
+  const completed = events.find((event) => event.type === "turn_completed");
+  assert.equal(completed?.type, "turn_completed");
+  assert.equal(completed?.text, undefined);
+});
+
 test("different projects run concurrently with separate execution keys", async () => {
   const { manager, backend } = makeManager();
   backend.enqueue({ text: "bridge done", waitForRelease: "bridge" });

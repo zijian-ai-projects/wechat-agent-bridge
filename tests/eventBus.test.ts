@@ -3,6 +3,25 @@ import assert from "node:assert/strict";
 
 import { EventBus, type BridgeEvent } from "../src/core/EventBus.js";
 
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  assert.equal(predicate(), true);
+}
+
+function stateEvent(): BridgeEvent {
+  return {
+    type: "state",
+    project: "bridge",
+    state: "idle",
+    model: "Codex CLI default",
+    modelSource: "unresolved",
+    timestamp: "2026-04-27T00:00:00.000Z",
+  };
+}
+
 test("EventBus publishes events to active subscribers", async () => {
   const bus = new EventBus();
   const received: BridgeEvent[] = [];
@@ -26,6 +45,7 @@ test("EventBus publishes events to active subscribers", async () => {
     timestamp: "2026-04-27T00:00:01.000Z",
   });
 
+  await waitFor(() => received.length === 1);
   assert.deepEqual(
     received.map((event) => event.type),
     ["user_message"],
@@ -58,6 +78,43 @@ test("EventBus isolates subscriber failures", async () => {
     timestamp: "2026-04-27T00:00:00.000Z",
   });
 
+  await waitFor(() => received.length === 1);
   assert.equal(received.length, 1);
   assert.equal(received[0]?.type, "state");
+});
+
+test("EventBus publish does not wait for slow subscribers", async () => {
+  const bus = new EventBus();
+  let fastSubscriberCalled = false;
+  bus.subscribe(async () => {
+    await new Promise(() => undefined);
+  });
+  bus.subscribe(() => {
+    fastSubscriberCalled = true;
+  });
+
+  const result = await Promise.race([bus.publish(stateEvent()).then(() => "published"), new Promise((resolve) => setTimeout(() => resolve("timeout"), 20))]);
+
+  assert.equal(result, "published");
+  await waitFor(() => fastSubscriberCalled);
+});
+
+test("EventBus drops events beyond the subscriber queue limit", async () => {
+  const bus = new EventBus({ maxQueuedEventsPerSubscriber: 1 });
+  let received = 0;
+  let release: (() => void) | undefined;
+  bus.subscribe(async () => {
+    received += 1;
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+  });
+
+  await bus.publish(stateEvent());
+  await bus.publish(stateEvent());
+  await waitFor(() => received === 1);
+  release?.();
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(received, 1);
 });
