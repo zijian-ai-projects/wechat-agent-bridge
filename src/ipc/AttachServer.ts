@@ -139,6 +139,26 @@ export class AttachServer {
   }
 
   private async handlePrompt(message: Extract<AttachClientMessage, { type: "prompt" }>): Promise<void> {
+    await this.waitForAcceptedPrompt(({ onAccepted }) =>
+      this.options.projectManager.runPrompt({
+        ...(message.project ? { projectAlias: message.project } : {}),
+        prompt: message.text,
+        toUserId: this.options.boundUserId,
+        contextToken: "",
+        source: "attach",
+        onAccepted: (projectAlias) => {
+          onAccepted(projectAlias);
+          void this.options.sendWechatText(`[${projectAlias}] 桌面输入:\n${message.text}`).catch((error) => {
+            logger.warn("Failed to mirror attach prompt to WeChat", { error: errorMessage(error), project: projectAlias });
+          });
+        },
+      }),
+    );
+  }
+
+  private async waitForAcceptedPrompt(
+    runPrompt: (callbacks: { onAccepted: (projectAlias: string) => void }) => Promise<void>,
+  ): Promise<void> {
     let acceptedProject: string | undefined;
     let resolveAccepted!: () => void;
     let rejectBeforeAccepted!: (error: unknown) => void;
@@ -146,22 +166,14 @@ export class AttachServer {
       resolveAccepted = resolve;
       rejectBeforeAccepted = reject;
     });
-    const runPrompt = this.options.projectManager.runPrompt({
-      ...(message.project ? { projectAlias: message.project } : {}),
-      prompt: message.text,
-      toUserId: this.options.boundUserId,
-      contextToken: "",
-      source: "attach",
+    const turn = runPrompt({
       onAccepted: (projectAlias) => {
         if (acceptedProject) return;
         acceptedProject = projectAlias;
-        void this.options.sendWechatText(`[${projectAlias}] 桌面输入:\n${message.text}`).catch((error) => {
-          logger.warn("Failed to mirror attach prompt to WeChat", { error: errorMessage(error), project: projectAlias });
-        });
         resolveAccepted();
       },
     });
-    void runPrompt.then(
+    void turn.then(
       () => {
         if (!acceptedProject) resolveAccepted();
       },
@@ -188,13 +200,16 @@ export class AttachServer {
         await this.options.projectManager.interrupt(message.project);
         return;
       case "replace":
-        await this.options.projectManager.replacePrompt({
-          ...(message.project ? { projectAlias: message.project } : {}),
-          prompt: message.text,
-          toUserId: this.options.boundUserId,
-          contextToken: "",
-          source: "attach",
-        });
+        await this.waitForAcceptedPrompt(({ onAccepted }) =>
+          this.options.projectManager.replacePrompt({
+            ...(message.project ? { projectAlias: message.project } : {}),
+            prompt: message.text,
+            toUserId: this.options.boundUserId,
+            contextToken: "",
+            source: "attach",
+            onAccepted,
+          }),
+        );
         return;
       case "model":
         await this.options.projectManager.setModel(message.project, message.value);

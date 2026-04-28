@@ -71,8 +71,14 @@ class FakeProjectManager {
     this.interrupts.push(alias);
   }
 
-  async replacePrompt(options: { projectAlias?: string; prompt: string; toUserId: string; contextToken: string; source?: string }): Promise<void> {
-    this.replacements.push(options);
+  async replacePrompt(options: FakeRunPromptOptions): Promise<void> {
+    this.replacements.push(stripPromptOptions(options));
+    options.onAccepted?.(options.projectAlias ?? this.activeProjectAlias);
+    if (this.blockRunPrompt) {
+      await new Promise<void>((resolve) => {
+        this.releaseRunPrompt = resolve;
+      });
+    }
   }
 
   async setModel(alias: string | undefined, model: string | undefined): Promise<ProjectSession> {
@@ -339,6 +345,22 @@ test("AttachServer continues processing commands after a prompt is accepted", as
 
     socket.write(serializeAttachMessage({ type: "prompt", project: "bridge", text: "long task" }));
     await waitFor(() => manager.prompts.length === 1 && wechatMessages.length === 1);
+
+    socket.write(serializeAttachMessage({ type: "command", project: "bridge", name: "interrupt" }));
+    await waitFor(() => manager.interrupts.length === 1);
+
+    manager.unblockRunPrompt();
+    socket.end();
+  });
+});
+
+test("AttachServer continues processing commands after a replacement is accepted", async () => {
+  await withServer(async ({ socketPath, manager }) => {
+    manager.blockRunPrompt = true;
+    const { socket } = await connectClient(socketPath);
+
+    socket.write(serializeAttachMessage({ type: "command", project: "bridge", name: "replace", text: "long replacement" }));
+    await waitFor(() => manager.replacements.length === 1);
 
     socket.write(serializeAttachMessage({ type: "command", project: "bridge", name: "interrupt" }));
     await waitFor(() => manager.interrupts.length === 1);
