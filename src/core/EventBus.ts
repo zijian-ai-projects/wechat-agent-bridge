@@ -68,7 +68,7 @@ export class EventBus implements BridgeEventBus {
 
   private enqueue(handler: BridgeEventHandler, event: BridgeEvent): void {
     const queuedCount = this.queuedCounts.get(handler) ?? 0;
-    if (queuedCount >= this.maxQueuedEventsPerSubscriber) return;
+    if (queuedCount >= this.maxQueuedEventsPerSubscriber && isDroppableEvent(event)) return;
     this.queuedCounts.set(handler, queuedCount + 1);
 
     const previous = this.queues.get(handler) ?? Promise.resolve();
@@ -93,6 +93,10 @@ export class EventBus implements BridgeEventBus {
       }
     });
   }
+}
+
+function isDroppableEvent(event: BridgeEvent): boolean {
+  return event.type === "codex_event";
 }
 
 export class NullEventBus implements BridgeEventBus {

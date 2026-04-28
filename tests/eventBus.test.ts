@@ -22,6 +22,15 @@ function stateEvent(): BridgeEvent {
   };
 }
 
+function codexEvent(text: string): BridgeEvent {
+  return {
+    type: "codex_event",
+    project: "bridge",
+    text,
+    timestamp: "2026-04-27T00:00:00.000Z",
+  };
+}
+
 test("EventBus publishes events to active subscribers", async () => {
   const bus = new EventBus();
   const received: BridgeEvent[] = [];
@@ -110,11 +119,34 @@ test("EventBus drops events beyond the subscriber queue limit", async () => {
     });
   });
 
-  await bus.publish(stateEvent());
-  await bus.publish(stateEvent());
+  await bus.publish(codexEvent("first"));
+  await bus.publish(codexEvent("dropped"));
   await waitFor(() => received === 1);
   release?.();
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
   assert.equal(received, 1);
+});
+
+test("EventBus keeps terminal events when progress events overflow", async () => {
+  const bus = new EventBus({ maxQueuedEventsPerSubscriber: 1 });
+  const received: string[] = [];
+  let release: (() => void) | undefined;
+  bus.subscribe(async (event) => {
+    received.push(event.type === "codex_event" ? event.text : event.type);
+    if (received.length === 1) {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    }
+  });
+
+  await bus.publish(codexEvent("first"));
+  await bus.publish(codexEvent("dropped"));
+  await bus.publish(stateEvent());
+  await waitFor(() => received.length === 1);
+  release?.();
+  await waitFor(() => received.length === 2);
+
+  assert.deepEqual(received, ["first", "state"]);
 });

@@ -470,6 +470,36 @@ test("background delivery failure publishes only a failed terminal event", async
   );
 });
 
+test("interrupted turn does not publish completion after final delivery unblocks", async () => {
+  const events: BridgeEvent[] = [];
+  const { manager, backend, sender } = makeManager({
+    eventBus: {
+      publish: async (event) => {
+        events.push(event);
+      },
+      subscribe: () => () => undefined,
+    },
+  });
+  let deliveryStarted = false;
+  let releaseDelivery: (() => void) | undefined;
+  sender.sendText = async () => {
+    deliveryStarted = true;
+    await new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+  };
+  backend.enqueue({ text: "done" });
+
+  const run = manager.runPrompt({ projectAlias: "SageTalk", prompt: "background", toUserId: "user-1", contextToken: "ctx" });
+  await waitFor(() => deliveryStarted);
+  await manager.interrupt("SageTalk");
+  releaseDelivery?.();
+  await run;
+
+  assert.equal(events.some((event) => event.type === "turn_completed"), false);
+  assert.ok(events.some((event) => event.type === "state" && event.state === "idle"));
+});
+
 test("successful no-text turns publish completion without text", async () => {
   const events: BridgeEvent[] = [];
   const { manager, backend } = makeManager({

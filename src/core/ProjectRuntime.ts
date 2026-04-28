@@ -163,6 +163,7 @@ export class ProjectRuntime {
             rethrowAfterFailureEvent = true;
             throw error;
           }
+          if (session.activeTurnId !== turnId) return;
         }
         this.publishEvent({
           type: "turn_completed",
@@ -178,6 +179,7 @@ export class ProjectRuntime {
         rethrowAfterFailureEvent = true;
         throw error;
       }
+      if (session.activeTurnId !== turnId) return;
       this.publishEvent({ type: "turn_completed", project: this.project.alias, timestamp: nowIso() });
     } catch (error) {
       if (session.activeTurnId !== turnId) return;
