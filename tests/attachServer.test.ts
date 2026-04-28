@@ -12,6 +12,15 @@ import { AttachServer } from "../src/ipc/AttachServer.js";
 import { JsonLineBuffer, serializeAttachMessage, type AttachServerEvent } from "../src/ipc/protocol.js";
 import type { ProjectSession } from "../src/session/types.js";
 
+interface FakeRunPromptOptions {
+  projectAlias?: string;
+  prompt: string;
+  toUserId: string;
+  contextToken: string;
+  source?: string;
+  onAccepted?: (projectAlias: string) => void;
+}
+
 interface ClientReadWaiter {
   reject: (error: Error) => void;
   resolve: (event: AttachServerEvent) => void;
@@ -33,15 +42,29 @@ class FakeProjectManager {
   interrupts: Array<string | undefined> = [];
   replacements: Array<{ projectAlias?: string; prompt: string; toUserId: string; contextToken: string; source?: string }> = [];
   models: Array<{ alias?: string; model?: string }> = [];
+  blockRunPrompt = false;
+  blockSetModel = false;
   failRunPrompt = false;
+  private releaseRunPrompt?: () => void;
+  private releaseSetModel?: () => void;
 
   async listProjects(): Promise<Array<{ alias: string; cwd: string; ready: boolean; active: boolean }>> {
     return [{ alias: "bridge", cwd: "/tmp/bridge", ready: true, active: true }];
   }
 
-  async runPrompt(options: { projectAlias?: string; prompt: string; toUserId: string; contextToken: string; source?: string }): Promise<void> {
+  async runPrompt(options: FakeRunPromptOptions): Promise<void> {
     if (this.failRunPrompt) throw new Error("busy");
-    this.prompts.push(options);
+    this.prompts.push(stripPromptOptions(options));
+    options.onAccepted?.(options.projectAlias ?? this.activeProjectAlias);
+    if (this.blockRunPrompt) {
+      await new Promise<void>((resolve) => {
+        this.releaseRunPrompt = resolve;
+      });
+    }
+  }
+
+  unblockRunPrompt(): void {
+    this.releaseRunPrompt?.();
   }
 
   async interrupt(alias?: string): Promise<void> {
@@ -54,7 +77,16 @@ class FakeProjectManager {
 
   async setModel(alias: string | undefined, model: string | undefined): Promise<ProjectSession> {
     this.models.push({ alias, model });
+    if (this.blockSetModel) {
+      await new Promise<void>((resolve) => {
+        this.releaseSetModel = resolve;
+      });
+    }
     return this.session(alias);
+  }
+
+  unblockSetModel(): void {
+    this.releaseSetModel?.();
   }
 
   async session(alias = "bridge"): Promise<ProjectSession> {
@@ -70,6 +102,17 @@ class FakeProjectManager {
       updatedAt: "2026-04-27T00:00:00.000Z",
     };
   }
+}
+
+function stripPromptOptions(options: FakeRunPromptOptions): {
+  projectAlias?: string;
+  prompt: string;
+  toUserId: string;
+  contextToken: string;
+  source?: string;
+} {
+  const { onAccepted: _onAccepted, ...promptOptions } = options;
+  return promptOptions;
 }
 
 function makeSocketPath(): string {
@@ -223,6 +266,22 @@ test("AttachServer mirrors prompts only after runtime accepts them", async () =>
   });
 });
 
+test("AttachServer mirrors accepted prompts before the runtime turn completes", async () => {
+  await withServer(async ({ socketPath, manager, wechatMessages }) => {
+    manager.blockRunPrompt = true;
+    const { socket } = await connectClient(socketPath);
+
+    socket.write(serializeAttachMessage({ type: "prompt", project: "bridge", text: "long task" }));
+    await waitFor(() => manager.prompts.length === 1);
+
+    assert.equal(wechatMessages.length, 1);
+    assert.match(wechatMessages[0] ?? "", /long task/);
+
+    manager.unblockRunPrompt();
+    socket.end();
+  });
+});
+
 test("AttachServer broadcasts bridge events and handles commands", async () => {
   await withServer(async ({ socketPath, eventBus, manager }) => {
     const { socket, buffer } = await connectClient(socketPath);
@@ -248,6 +307,44 @@ test("AttachServer broadcasts bridge events and handles commands", async () => {
     assert.deepEqual(manager.models, [{ alias: "bridge", model: "gpt-5.5" }]);
     assert.equal(models.type, "models");
     assert.equal(models.models[0]?.slug, "gpt-5.5");
+  });
+});
+
+test("AttachServer handles messages from one client in JSONL order", async () => {
+  await withServer(async ({ socketPath, manager }) => {
+    manager.blockSetModel = true;
+    const { socket } = await connectClient(socketPath);
+
+    socket.write(
+      `${serializeAttachMessage({ type: "command", project: "bridge", name: "model", value: "gpt-5.5" })}${serializeAttachMessage({
+        type: "prompt",
+        project: "bridge",
+        text: "after model",
+      })}`,
+    );
+    await waitFor(() => manager.models.length === 1);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    assert.equal(manager.prompts.length, 0);
+
+    manager.unblockSetModel();
+    await waitFor(() => manager.prompts.length === 1);
+    socket.end();
+  });
+});
+
+test("AttachServer continues processing commands after a prompt is accepted", async () => {
+  await withServer(async ({ socketPath, manager, wechatMessages }) => {
+    manager.blockRunPrompt = true;
+    const { socket } = await connectClient(socketPath);
+
+    socket.write(serializeAttachMessage({ type: "prompt", project: "bridge", text: "long task" }));
+    await waitFor(() => manager.prompts.length === 1 && wechatMessages.length === 1);
+
+    socket.write(serializeAttachMessage({ type: "command", project: "bridge", name: "interrupt" }));
+    await waitFor(() => manager.interrupts.length === 1);
+
+    manager.unblockRunPrompt();
+    socket.end();
   });
 });
 

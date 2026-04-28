@@ -422,6 +422,52 @@ test("busy-rejected prompts do not publish phantom user messages", async () => {
   await first;
 });
 
+test("attach busy prompts reject instead of sending WeChat busy notices", async () => {
+  const { manager, backend, sender } = makeManager();
+  backend.enqueue({ text: "done", waitForRelease: "bridge" });
+
+  const first = manager.runPrompt({ projectAlias: "bridge", prompt: "first", toUserId: "user-1", contextToken: "ctx", source: "attach" });
+  await waitFor(() => backend.startRequests.length === 1);
+
+  await assert.rejects(
+    manager.runPrompt({ projectAlias: "bridge", prompt: "second", toUserId: "user-1", contextToken: "ctx", source: "attach" }),
+    /Project is busy: bridge/,
+  );
+  assert.deepEqual(sender.messages, []);
+
+  backend.release("bridge");
+  await first;
+});
+
+test("attach accepted callbacks run before the runtime turn completes", async () => {
+  const accepted: string[] = [];
+  const { manager, backend } = makeManager();
+  backend.enqueue({ text: "done", waitForRelease: "bridge" });
+
+  let completed = false;
+  const run = manager
+    .runPrompt({
+      projectAlias: "bridge",
+      prompt: "long task",
+      toUserId: "user-1",
+      contextToken: "ctx",
+      source: "attach",
+      onAccepted: (projectAlias) => {
+        accepted.push(projectAlias);
+      },
+    })
+    .then(() => {
+      completed = true;
+    });
+  await waitFor(() => backend.startRequests.length === 1);
+
+  assert.deepEqual(accepted, ["bridge"]);
+  assert.equal(completed, false);
+
+  backend.release("bridge");
+  await run;
+});
+
 test("interrupt publishes an idle state event", async () => {
   const events: BridgeEvent[] = [];
   const { manager, backend } = makeManager({

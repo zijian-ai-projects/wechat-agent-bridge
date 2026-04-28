@@ -37,6 +37,7 @@ export interface ManagerRunPromptOptions {
   toUserId: string;
   contextToken: string;
   source?: BridgePromptSource;
+  onAccepted?: (projectAlias: string) => void;
 }
 
 export interface ProjectListEntry extends DiscoveredProject {
@@ -140,10 +141,12 @@ export class ProjectRuntimeManager {
               timestamp: nowIso(),
             })
             .catch(() => undefined);
+          options.onAccepted?.(alias);
         },
       });
     } catch (error) {
       if (!(error instanceof BusyProjectError)) throw error;
+      if (options.source === "attach") throw error;
       await this.sender.sendText(
         options.toUserId,
         options.contextToken,

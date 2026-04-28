@@ -81,6 +81,14 @@ export class AttachServer {
 
   private accept(socket: Socket): void {
     const buffer = new JsonLineBuffer<AttachClientMessage>({ parse: parseAttachClientMessage });
+    let messageQueue = Promise.resolve();
+    const enqueueMessage = (message: AttachClientMessage): void => {
+      messageQueue = messageQueue
+        .then(() => this.handleMessage(socket, message))
+        .catch((error) => {
+          this.send(socket, { type: "error", message: errorMessage(error) });
+        });
+    };
     this.clients.add(socket);
     socket.on("close", () => {
       this.clients.delete(socket);
@@ -90,27 +98,29 @@ export class AttachServer {
     });
     socket.on("data", (chunk: Buffer) => {
       try {
-        this.dispatchMessages(socket, buffer.push(chunk.toString("utf8")));
+        this.dispatchMessages(enqueueMessage, buffer.push(chunk.toString("utf8")));
       } catch (error) {
         this.send(socket, { type: "error", message: errorMessage(error) });
-        this.drainPreservedMessages(socket, buffer);
+        this.drainPreservedMessages(socket, buffer, enqueueMessage);
       }
     });
   }
 
-  private drainPreservedMessages(socket: Socket, buffer: JsonLineBuffer<AttachClientMessage>): void {
+  private drainPreservedMessages(
+    socket: Socket,
+    buffer: JsonLineBuffer<AttachClientMessage>,
+    enqueueMessage: (message: AttachClientMessage) => void,
+  ): void {
     try {
-      this.dispatchMessages(socket, buffer.push(""));
+      this.dispatchMessages(enqueueMessage, buffer.push(""));
     } catch (error) {
       this.send(socket, { type: "error", message: errorMessage(error) });
     }
   }
 
-  private dispatchMessages(socket: Socket, messages: AttachClientMessage[]): void {
+  private dispatchMessages(enqueueMessage: (message: AttachClientMessage) => void, messages: AttachClientMessage[]): void {
     for (const message of messages) {
-      void this.handleMessage(socket, message).catch((error) => {
-        this.send(socket, { type: "error", message: errorMessage(error) });
-      });
+      enqueueMessage(message);
     }
   }
 
@@ -129,17 +139,41 @@ export class AttachServer {
   }
 
   private async handlePrompt(message: Extract<AttachClientMessage, { type: "prompt" }>): Promise<void> {
-    const project = message.project ?? this.options.projectManager.activeProjectAlias;
-    await this.options.projectManager.runPrompt({
+    let acceptedProject: string | undefined;
+    let resolveAccepted!: () => void;
+    let rejectBeforeAccepted!: (error: unknown) => void;
+    const acceptedOrRejected = new Promise<void>((resolve, reject) => {
+      resolveAccepted = resolve;
+      rejectBeforeAccepted = reject;
+    });
+    const runPrompt = this.options.projectManager.runPrompt({
       ...(message.project ? { projectAlias: message.project } : {}),
       prompt: message.text,
       toUserId: this.options.boundUserId,
       contextToken: "",
       source: "attach",
+      onAccepted: (projectAlias) => {
+        if (acceptedProject) return;
+        acceptedProject = projectAlias;
+        void this.options.sendWechatText(`[${projectAlias}] 桌面输入:\n${message.text}`).catch((error) => {
+          logger.warn("Failed to mirror attach prompt to WeChat", { error: errorMessage(error), project: projectAlias });
+        });
+        resolveAccepted();
+      },
     });
-    void this.options.sendWechatText(`[${project}] 桌面输入:\n${message.text}`).catch((error) => {
-      logger.warn("Failed to mirror attach prompt to WeChat", { error: errorMessage(error), project });
-    });
+    void runPrompt.then(
+      () => {
+        if (!acceptedProject) resolveAccepted();
+      },
+      (error) => {
+        if (!acceptedProject) {
+          rejectBeforeAccepted(error);
+          return;
+        }
+        logger.warn("Attach prompt failed after acceptance", { error: errorMessage(error), project: acceptedProject });
+      },
+    );
+    await acceptedOrRejected;
   }
 
   private async handleCommand(socket: Socket, message: Extract<AttachClientMessage, { type: "command" }>): Promise<void> {
