@@ -55,3 +55,7 @@ test("parseAttachInput preserves prompt whitespace but ignores empty input", () 
     text: "  keep leading spaces",
   });
 });
+
+test("parseAttachInput ignores unknown colon commands", () => {
+  assert.equal(parseAttachInput(":unknown", "bridge"), undefined);
+});

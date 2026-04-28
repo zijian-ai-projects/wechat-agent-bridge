@@ -12,7 +12,7 @@ export function parseAttachInput(input: string, activeProject?: string): AttachC
   const rest = restParts.join(" ").trim();
 
   if (!isAttachCommandName(name)) {
-    return { type: "command", project: activeProject, name: "status" };
+    return undefined;
   }
 
   switch (name) {
