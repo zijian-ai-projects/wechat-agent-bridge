@@ -38,12 +38,18 @@ export interface EventBusOptions {
   maxQueuedEventsPerSubscriber?: number;
 }
 
+interface EventSubscription {
+  active: boolean;
+  handler: BridgeEventHandler;
+  pendingCount: number;
+  processing: boolean;
+  queue: BridgeEvent[];
+}
+
 export class EventBus implements BridgeEventBus {
   private static readonly DEFAULT_MAX_QUEUED_EVENTS_PER_SUBSCRIBER = 1000;
 
-  private readonly handlers = new Set<BridgeEventHandler>();
-  private readonly queues = new Map<BridgeEventHandler, Promise<void>>();
-  private readonly queuedCounts = new Map<BridgeEventHandler, number>();
+  private readonly subscriptions = new Set<EventSubscription>();
   private readonly maxQueuedEventsPerSubscriber: number;
 
   constructor(options: EventBusOptions = {}) {
@@ -52,46 +58,50 @@ export class EventBus implements BridgeEventBus {
   }
 
   subscribe(handler: BridgeEventHandler): () => void {
-    this.handlers.add(handler);
+    const subscription: EventSubscription = { active: true, handler, pendingCount: 0, processing: false, queue: [] };
+    this.subscriptions.add(subscription);
     return () => {
-      this.handlers.delete(handler);
-      this.queuedCounts.delete(handler);
+      subscription.active = false;
+      subscription.pendingCount = 0;
+      subscription.queue = [];
+      this.subscriptions.delete(subscription);
     };
   }
 
   publish(event: BridgeEvent): Promise<void> {
-    for (const handler of this.handlers) {
-      this.enqueue(handler, event);
+    for (const subscription of this.subscriptions) {
+      this.enqueue(subscription, event);
     }
     return Promise.resolve();
   }
 
-  private enqueue(handler: BridgeEventHandler, event: BridgeEvent): void {
-    const queuedCount = this.queuedCounts.get(handler) ?? 0;
-    if (queuedCount >= this.maxQueuedEventsPerSubscriber && isDroppableEvent(event)) return;
-    this.queuedCounts.set(handler, queuedCount + 1);
+  private enqueue(subscription: EventSubscription, event: BridgeEvent): void {
+    if (!subscription.active) return;
+    if (subscription.pendingCount >= this.maxQueuedEventsPerSubscriber && isDroppableEvent(event)) return;
+    subscription.pendingCount += 1;
+    subscription.queue.push(event);
+    if (subscription.processing) return;
+    subscription.processing = true;
+    queueMicrotask(() => void this.drain(subscription));
+  }
 
-    const previous = this.queues.get(handler) ?? Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(async () => {
-        await handler(event);
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        const currentCount = this.queuedCounts.get(handler) ?? 0;
-        if (currentCount <= 1) {
-          this.queuedCounts.delete(handler);
-        } else {
-          this.queuedCounts.set(handler, currentCount - 1);
-        }
-      });
-    this.queues.set(handler, next);
-    void next.finally(() => {
-      if (this.queues.get(handler) === next) {
-        this.queues.delete(handler);
+  private async drain(subscription: EventSubscription): Promise<void> {
+    while (subscription.active) {
+      const event = subscription.queue.shift();
+      if (!event) break;
+      try {
+        await subscription.handler(event);
+      } catch {
+        // Subscriber failures must not break later event delivery.
+      } finally {
+        subscription.pendingCount = Math.max(0, subscription.pendingCount - 1);
       }
-    });
+    }
+    subscription.processing = false;
+    if (subscription.active && subscription.queue.length > 0) {
+      subscription.processing = true;
+      queueMicrotask(() => void this.drain(subscription));
+    }
   }
 }
 

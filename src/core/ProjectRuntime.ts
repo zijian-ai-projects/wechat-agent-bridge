@@ -84,7 +84,6 @@ export class ProjectRuntime {
     session.activeTurnId = turnId;
     this.sessionStore.addHistory(session, "user", options.prompt);
     await this.sessionStore.save(session);
-    options.onAccepted?.();
 
     const prefix = `[${this.project.alias}] `;
     const stream = new StreamBuffer({
@@ -97,6 +96,15 @@ export class ProjectRuntime {
 
     let rethrowAfterFailureEvent = false;
     try {
+      try {
+        options.onAccepted?.();
+      } catch (error) {
+        logger.warn("Bridge accepted-event callback failed", {
+          projectAlias: this.project.alias,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
       const modelState = await this.describeModelState(session);
       this.publishEvent({
         type: "turn_started",
@@ -200,7 +208,7 @@ export class ProjectRuntime {
         session.state = "idle";
         session.activeTurnId = undefined;
         await this.sessionStore.save(session);
-        await this.publishState(session);
+        await this.publishState(session, session.state);
       }
     }
   }
@@ -216,7 +224,7 @@ export class ProjectRuntime {
       session.state = "idle";
       session.activeTurnId = undefined;
       await this.sessionStore.save(session);
-      await this.publishState(session);
+      await this.publishState(session, session.state);
       await this.agentService.interrupt(this.executionKey);
     })();
     this.interruptPromise = interruptPromise;
@@ -239,9 +247,13 @@ export class ProjectRuntime {
   }
 
   private publishEvent(event: Parameters<BridgeEventBus["publish"]>[0]): void {
-    void this.eventBus.publish(event).catch((error) => {
+    try {
+      void this.eventBus.publish(event).catch((error) => {
+        logger.warn("Bridge event publication failed", { error: error instanceof Error ? error.message : String(error) });
+      });
+    } catch (error) {
       logger.warn("Bridge event publication failed", { error: error instanceof Error ? error.message : String(error) });
-    });
+    }
   }
 
   private async describeModelState(session: Pick<ProjectSession, "model">): Promise<ModelState> {
@@ -256,12 +268,12 @@ export class ProjectRuntime {
     }
   }
 
-  private async publishState(session: ProjectSession): Promise<void> {
+  private async publishState(session: ProjectSession, state: ProjectSession["state"]): Promise<void> {
     const modelState = await this.describeModelState(session);
     this.publishEvent({
       type: "state",
       project: this.project.alias,
-      state: session.state,
+      state,
       model: modelState.effectiveModel,
       modelSource: modelState.source,
       timestamp: nowIso(),

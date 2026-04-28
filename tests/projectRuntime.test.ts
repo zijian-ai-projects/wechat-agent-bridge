@@ -519,6 +519,60 @@ test("successful no-text turns publish completion without text", async () => {
   assert.equal(completed?.text, undefined);
 });
 
+test("state event uses an idle snapshot even if the session changes during model lookup", async () => {
+  const events: BridgeEvent[] = [];
+  let lookupCount = 0;
+  const releaseModelLookups: Array<() => void> = [];
+  const { manager, backend } = makeManager({
+    eventBus: {
+      publish: async (event) => {
+        events.push(event);
+      },
+      subscribe: () => () => undefined,
+    },
+    modelService: {
+      describeSession: async () => {
+        lookupCount += 1;
+        await new Promise<void>((resolve) => {
+          releaseModelLookups.push(resolve);
+        });
+        return { effectiveModel: "gpt-5.5", source: "project override" };
+      },
+    },
+  });
+  backend.enqueue({ text: "done" });
+
+  const run = manager.runPrompt({ projectAlias: "bridge", prompt: "done", toUserId: "user-1", contextToken: "ctx" });
+  await waitFor(() => lookupCount === 1 && releaseModelLookups.length === 1);
+  releaseModelLookups.shift()?.();
+  await waitFor(() => events.some((event) => event.type === "turn_started"));
+  await waitFor(() => lookupCount === 2 && releaseModelLookups.length === 1);
+  const session = await manager.session("bridge");
+  session.state = "processing";
+  releaseModelLookups.shift()?.();
+  await run;
+  await waitFor(() => events.some((event) => event.type === "state"));
+
+  const state = events.find((event) => event.type === "state");
+  assert.equal(state?.type, "state");
+  assert.equal(state?.state, "idle");
+});
+
+test("onAccepted failures do not leave the project processing", async () => {
+  const { manager } = makeManager({
+    eventBus: {
+      publish: () => {
+        throw new Error("publish failed");
+      },
+      subscribe: () => () => undefined,
+    },
+  });
+
+  await manager.runPrompt({ projectAlias: "bridge", prompt: "hi", toUserId: "user-1", contextToken: "ctx" });
+
+  assert.equal((await manager.session("bridge")).state, "idle");
+});
+
 test("different projects run concurrently with separate execution keys", async () => {
   const { manager, backend } = makeManager();
   backend.enqueue({ text: "bridge done", waitForRelease: "bridge" });

@@ -150,3 +150,26 @@ test("EventBus keeps terminal events when progress events overflow", async () =>
 
   assert.deepEqual(received, ["first", "state"]);
 });
+
+test("EventBus does not deliver queued events after unsubscribe", async () => {
+  const bus = new EventBus({ maxQueuedEventsPerSubscriber: 10 });
+  const received: string[] = [];
+  let release: (() => void) | undefined;
+  const unsubscribe = bus.subscribe(async (event) => {
+    received.push(event.type === "codex_event" ? event.text : event.type);
+    if (received.length === 1) {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    }
+  });
+
+  await bus.publish(codexEvent("first"));
+  await bus.publish(stateEvent());
+  await waitFor(() => received.length === 1);
+  unsubscribe();
+  release?.();
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(received, ["first"]);
+});
