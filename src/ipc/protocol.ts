@@ -56,6 +56,7 @@ export class JsonLineBuffer<T = unknown> {
         parsed.push(this.parse(parseJsonLine(line)));
       } catch (error) {
         this.pending = preserveUnprocessedLines(lines, index, this.pending);
+        this.dropPendingIfOversized();
         throw error;
       }
     }
@@ -70,6 +71,12 @@ export class JsonLineBuffer<T = unknown> {
     } catch (error) {
       this.pending = "";
       throw error;
+    }
+  }
+
+  private dropPendingIfOversized(): void {
+    if (Buffer.byteLength(this.pending, "utf8") > this.maxLineBytes) {
+      this.pending = "";
     }
   }
 }

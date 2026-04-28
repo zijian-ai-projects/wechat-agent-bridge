@@ -617,28 +617,38 @@ test("AttachServer restricts attach directory and socket permissions", async () 
   }
 });
 
-test("AttachServer disconnects clients whose socket buffer exceeds the output limit", async () => {
-  await withServer(async ({ socketPath, eventBus }) => {
-    const socket = connect(socketPath);
-    let closed = false;
-    socket.on("close", () => {
-      closed = true;
-    });
-    await new Promise<void>((resolve, reject) => {
-      socket.once("connect", resolve);
-      socket.once("error", reject);
-    });
-    socket.pause();
-
-    await eventBus.publish({
-      type: "codex_event",
-      project: "bridge",
-      text: "x".repeat(1024 * 1024),
-      timestamp: "2026-04-27T00:00:00.000Z",
-    });
-
-    await waitFor(() => closed || socket.destroyed);
+test("AttachServer disconnects clients whose accumulated socket buffer exceeds the output limit", () => {
+  const attachServer = new AttachServer({
+    socketPath: makeSocketPath(),
+    eventBus: new EventBus(),
+    projectManager: new FakeProjectManager(),
+    boundUserId: "user-1",
+    sendWechatText: async () => undefined,
+    modelService: makeModelServiceStub(),
   });
+  let wrote = false;
+  let destroyed = false;
+  const socket = {
+    destroyed: false,
+    writableLength: 1024 * 1024 - 1,
+    write: () => {
+      wrote = true;
+      return true;
+    },
+    destroy: () => {
+      destroyed = true;
+      return socket as unknown as Socket;
+    },
+  };
+
+  (
+    attachServer as unknown as {
+      send: (socket: Socket, event: AttachServerEvent) => void;
+    }
+  ).send(socket as unknown as Socket, { type: "error", message: "buffer limit" });
+
+  assert.equal(wrote, false);
+  assert.equal(destroyed, true);
 });
 
 async function listen(socketPath: string): Promise<Server> {

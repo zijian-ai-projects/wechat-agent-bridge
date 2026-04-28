@@ -48,6 +48,13 @@ test("JsonLineBuffer drops oversized unterminated lines after reporting them", (
   assert.deepEqual(buffer.push('{"a":1}\n'), [{ a: 1 }]);
 });
 
+test("JsonLineBuffer drops oversized pending tails when an earlier line fails", () => {
+  const buffer = new JsonLineBuffer({ maxLineBytes: 8 });
+
+  assert.throws(() => buffer.push("{bad}\n123456789"), /Invalid JSONL message/);
+  assert.deepEqual(buffer.push('{"a":1}\n'), [{ a: 1 }]);
+});
+
 test("JsonLineBuffer applies optional message validation", () => {
   const buffer = new JsonLineBuffer({ parse: parseAttachClientMessage });
 
