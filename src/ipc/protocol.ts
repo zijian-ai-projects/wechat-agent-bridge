@@ -55,8 +55,8 @@ export class JsonLineBuffer<T = unknown> {
         assertLineSize(line, this.maxLineBytes);
         parsed.push(this.parse(parseJsonLine(line)));
       } catch (error) {
-        this.pending = preserveUnprocessedLines(lines, index, this.pending);
-        this.dropPendingIfOversized();
+        const pendingTail = dropIfOversized(this.pending, this.maxLineBytes);
+        this.pending = preserveUnprocessedLines(lines, index, pendingTail);
         throw error;
       }
     }
@@ -71,12 +71,6 @@ export class JsonLineBuffer<T = unknown> {
     } catch (error) {
       this.pending = "";
       throw error;
-    }
-  }
-
-  private dropPendingIfOversized(): void {
-    if (Buffer.byteLength(this.pending, "utf8") > this.maxLineBytes) {
-      this.pending = "";
     }
   }
 }
@@ -102,6 +96,10 @@ function assertLineSize(line: string, maxLineBytes: number): void {
   if (Buffer.byteLength(line, "utf8") > maxLineBytes) {
     throw new Error(`JSONL message exceeded ${maxLineBytes} bytes.`);
   }
+}
+
+function dropIfOversized(line: string, maxLineBytes: number): string {
+  return Buffer.byteLength(line, "utf8") > maxLineBytes ? "" : line;
 }
 
 function preserveUnprocessedLines(lines: string[], failedIndex: number, pending: string): string {

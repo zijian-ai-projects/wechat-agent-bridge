@@ -55,6 +55,13 @@ test("JsonLineBuffer drops oversized pending tails when an earlier line fails", 
   assert.deepEqual(buffer.push('{"a":1}\n'), [{ a: 1 }]);
 });
 
+test("JsonLineBuffer preserves recoverable lines while dropping oversized pending tails", () => {
+  const buffer = new JsonLineBuffer({ maxLineBytes: 8 });
+
+  assert.throws(() => buffer.push('{"a":1}\n{bad}\n123456789'), /Invalid JSONL message/);
+  assert.deepEqual(buffer.push(""), [{ a: 1 }]);
+});
+
 test("JsonLineBuffer applies optional message validation", () => {
   const buffer = new JsonLineBuffer({ parse: parseAttachClientMessage });
 
