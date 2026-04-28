@@ -1,4 +1,4 @@
-import { lstat, mkdir, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, rm } from "node:fs/promises";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 
@@ -13,6 +13,8 @@ import {
   type AttachClientMessage,
   type AttachServerEvent,
 } from "./protocol.js";
+
+const MAX_ATTACH_SOCKET_BUFFER_BYTES = 1024 * 1024;
 
 export interface AttachServerOptions {
   socketPath: string;
@@ -51,11 +53,14 @@ export class AttachServer {
 
   async start(): Promise<void> {
     if (this.started) return;
-    await mkdir(dirname(this.options.socketPath), { recursive: true, mode: 0o700 });
+    const socketDir = dirname(this.options.socketPath);
+    await mkdir(socketDir, { recursive: true, mode: 0o700 });
+    await chmod(socketDir, 0o700);
     await removeStaleSocket(this.options.socketPath);
     this.unsubscribe = this.options.eventBus.subscribe((event) => this.broadcast(event));
     try {
       await listen(this.server, this.options.socketPath);
+      await chmod(this.options.socketPath, 0o600);
       this.started = true;
       this.socketIdentity = await readSocketIdentity(this.options.socketPath);
     } catch (error) {
@@ -156,9 +161,7 @@ export class AttachServer {
         source: "attach",
         onAccepted: (projectAlias) => {
           onAccepted(projectAlias);
-          void this.options.sendWechatText(`[${projectAlias}] 桌面输入:\n${message.text}`).catch((error) => {
-            logger.warn("Failed to mirror attach prompt to WeChat", { error: errorMessage(error), project: projectAlias });
-          });
+          this.mirrorAttachPrompt(projectAlias, message.text);
         },
       }),
     );
@@ -216,7 +219,10 @@ export class AttachServer {
             toUserId: this.options.boundUserId,
             contextToken: "",
             source: "attach",
-            onAccepted,
+            onAccepted: (projectAlias) => {
+              onAccepted(projectAlias);
+              this.mirrorAttachPrompt(projectAlias, message.text);
+            },
           }),
         );
         return;
@@ -225,7 +231,7 @@ export class AttachServer {
           await this.sendModelState(socket, message.project);
           return;
         }
-        await this.options.projectManager.setModel(message.project, message.value);
+        await this.sendModelSessionState(socket, await this.options.projectManager.setModel(message.project, message.value));
         return;
       case "models":
         this.send(socket, { type: "models", models: (await this.options.modelService.listModels()).models });
@@ -251,7 +257,13 @@ export class AttachServer {
   }
 
   private async sendModelState(socket: Socket, alias?: string): Promise<void> {
-    const session = await this.options.projectManager.session(alias);
+    await this.sendModelSessionState(socket, await this.options.projectManager.session(alias));
+  }
+
+  private async sendModelSessionState(
+    socket: Socket,
+    session: Awaited<ReturnType<AttachServerOptions["projectManager"]["session"]>>,
+  ): Promise<void> {
     const model = await this.options.modelService.describeSession(session);
     this.send(socket, {
       type: "state",
@@ -263,6 +275,12 @@ export class AttachServer {
     });
   }
 
+  private mirrorAttachPrompt(projectAlias: string, text: string): void {
+    void this.options.sendWechatText(`[${projectAlias}] 桌面输入:\n${text}`).catch((error) => {
+      logger.warn("Failed to mirror attach prompt to WeChat", { error: errorMessage(error), project: projectAlias });
+    });
+  }
+
   private broadcast(event: BridgeEvent): void {
     for (const client of this.clients) {
       this.send(client, event);
@@ -271,7 +289,17 @@ export class AttachServer {
 
   private send(socket: Socket, event: AttachServerEvent): void {
     if (socket.destroyed) return;
-    socket.write(serializeAttachEvent(event));
+    const payload = serializeAttachEvent(event);
+    const payloadBytes = Buffer.byteLength(payload, "utf8");
+    if (socket.writableLength + payloadBytes > MAX_ATTACH_SOCKET_BUFFER_BYTES) {
+      logger.warn("Disconnecting slow attach client after socket buffer limit", {
+        bufferedBytes: socket.writableLength,
+        payloadBytes,
+      });
+      socket.destroy();
+      return;
+    }
+    socket.write(payload);
   }
 }
 

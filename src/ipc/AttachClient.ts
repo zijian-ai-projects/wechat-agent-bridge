@@ -24,7 +24,7 @@ export async function runAttach(options: RunAttachOptions = {}): Promise<void> {
   let activeProject = options.project;
   let inputClosed = false;
   let ready = false;
-  let waitingForProjectReady = false;
+  let readyCommandInFlight: "status" | "project" | undefined;
   const pendingInput: string[] = [];
 
   return await new Promise<void>((resolve, reject) => {
@@ -66,14 +66,14 @@ export async function runAttach(options: RunAttachOptions = {}): Promise<void> {
     });
     socket.once("end", () => {
       if (!ready) fail(new Error("Attach daemon closed before ready"));
-      else if (waitingForProjectReady || pendingInput.length > 0) fail(new Error("Attach daemon closed before pending input was delivered"));
+      else if (readyCommandInFlight || pendingInput.length > 0) fail(new Error("Attach daemon closed before pending input was delivered"));
     });
     socket.once("close", () => {
       if (!ready) {
         fail(new Error("Attach daemon closed before ready"));
         return;
       }
-      if (waitingForProjectReady || pendingInput.length > 0) {
+      if (readyCommandInFlight || pendingInput.length > 0) {
         fail(new Error("Attach daemon closed before pending input was delivered"));
         return;
       }
@@ -94,7 +94,7 @@ export async function runAttach(options: RunAttachOptions = {}): Promise<void> {
         if (event.type === "ready") {
           activeProject = event.activeProject;
           ready = true;
-          waitingForProjectReady = false;
+          readyCommandInFlight = undefined;
         }
         output.write(`${renderAttachEvent(event)}\n`);
       }
@@ -102,18 +102,19 @@ export async function runAttach(options: RunAttachOptions = {}): Promise<void> {
     }
 
     function processInputQueue(): void {
-      if (!ready || waitingForProjectReady || socket.destroyed) return;
-      while (pendingInput.length > 0 && !waitingForProjectReady && !socket.destroyed) {
+      if (!ready || readyCommandInFlight || socket.destroyed) return;
+      while (pendingInput.length > 0 && !readyCommandInFlight && !socket.destroyed) {
         const line = pendingInput.shift();
         if (line === undefined) continue;
         const message = parseAttachInput(line, activeProject);
         if (!message) continue;
         socket.write(serializeAttachMessage(message));
-        if (isProjectSwitchCommand(message)) {
-          waitingForProjectReady = true;
+        const readyCommandName = readyProducingCommandName(message);
+        if (readyCommandName) {
+          readyCommandInFlight = readyCommandName;
         }
       }
-      endIfInputComplete(socket, inputClosed, pendingInput, waitingForProjectReady);
+      endIfInputComplete(socket, inputClosed, pendingInput, Boolean(readyCommandInFlight));
     }
   });
 }
@@ -162,12 +163,13 @@ function closeReadline(readline: Interface): void {
   }
 }
 
-function isProjectSwitchCommand(message: AttachClientMessage): boolean {
-  return message.type === "command" && message.name === "project";
+function readyProducingCommandName(message: AttachClientMessage): "status" | "project" | undefined {
+  if (message.type !== "command") return undefined;
+  return message.name === "status" || message.name === "project" ? message.name : undefined;
 }
 
-function endIfInputComplete(socket: Socket, inputClosed: boolean, pendingInput: string[], waitingForProjectReady: boolean): void {
-  if (!inputClosed || pendingInput.length > 0 || waitingForProjectReady || socket.destroyed) return;
+function endIfInputComplete(socket: Socket, inputClosed: boolean, pendingInput: string[], readyCommandInFlight: boolean): void {
+  if (!inputClosed || pendingInput.length > 0 || readyCommandInFlight || socket.destroyed) return;
   socket.end();
 }
 

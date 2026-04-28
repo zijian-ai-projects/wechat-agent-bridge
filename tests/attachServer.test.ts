@@ -1,8 +1,8 @@
 import { existsSync, mkdtempSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { chmod, rm, stat } from "node:fs/promises";
 import { createServer, connect, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -375,6 +375,22 @@ test("AttachServer reports model state for model commands without a value", asyn
   });
 });
 
+test("AttachServer confirms model changes with updated model state", async () => {
+  await withServer(async ({ socketPath, manager }) => {
+    const { socket, buffer } = await connectClient(socketPath);
+
+    socket.write(serializeAttachMessage({ type: "command", project: "bridge", name: "model", value: "gpt-5.5" }));
+    const event = await readNext(socket, buffer);
+    socket.end();
+
+    assert.equal(event.type, "state");
+    assert.equal(event.project, "bridge");
+    assert.equal(event.model, "gpt-5.5");
+    assert.equal(event.modelSource, "project override");
+    assert.deepEqual(manager.models, [{ alias: "bridge", model: "gpt-5.5" }]);
+  });
+});
+
 test("AttachServer handles messages from one client in JSONL order", async () => {
   await withServer(async ({ socketPath, manager }) => {
     manager.blockSetModel = true;
@@ -414,12 +430,14 @@ test("AttachServer continues processing commands after a prompt is accepted", as
 });
 
 test("AttachServer continues processing commands after a replacement is accepted", async () => {
-  await withServer(async ({ socketPath, manager }) => {
+  await withServer(async ({ socketPath, manager, wechatMessages }) => {
     manager.blockRunPrompt = true;
     const { socket } = await connectClient(socketPath);
 
     socket.write(serializeAttachMessage({ type: "command", project: "bridge", name: "replace", text: "long replacement" }));
-    await waitFor(() => manager.replacements.length === 1);
+    await waitFor(() => manager.replacements.length === 1 && wechatMessages.length === 1);
+    assert.match(wechatMessages[0] ?? "", /桌面输入/);
+    assert.match(wechatMessages[0] ?? "", /long replacement/);
 
     socket.write(serializeAttachMessage({ type: "command", project: "bridge", name: "interrupt" }));
     await waitFor(() => manager.interrupts.length === 1);
@@ -573,6 +591,54 @@ test("AttachServer stop before start is safe and does not remove unrelated socke
 
   await closeServer(liveServer);
   await rm(socketPath.split("/bridge.sock")[0], { recursive: true, force: true });
+});
+
+test("AttachServer restricts attach directory and socket permissions", async () => {
+  const socketPath = makeSocketPath();
+  const socketDir = dirname(socketPath);
+  await chmod(socketDir, 0o777);
+  const attachServer = new AttachServer({
+    socketPath,
+    eventBus: new EventBus(),
+    projectManager: new FakeProjectManager(),
+    boundUserId: "user-1",
+    sendWechatText: async () => undefined,
+    modelService: makeModelServiceStub(),
+  });
+
+  try {
+    await attachServer.start();
+
+    assert.equal((await stat(socketDir)).mode & 0o777, 0o700);
+    assert.equal((await stat(socketPath)).mode & 0o777, 0o600);
+  } finally {
+    await attachServer.stop();
+    await rm(socketDir, { recursive: true, force: true });
+  }
+});
+
+test("AttachServer disconnects clients whose socket buffer exceeds the output limit", async () => {
+  await withServer(async ({ socketPath, eventBus }) => {
+    const socket = connect(socketPath);
+    let closed = false;
+    socket.on("close", () => {
+      closed = true;
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+    socket.pause();
+
+    await eventBus.publish({
+      type: "codex_event",
+      project: "bridge",
+      text: "x".repeat(1024 * 1024),
+      timestamp: "2026-04-27T00:00:00.000Z",
+    });
+
+    await waitFor(() => closed || socket.destroyed);
+  });
 });
 
 async function listen(socketPath: string): Promise<Server> {

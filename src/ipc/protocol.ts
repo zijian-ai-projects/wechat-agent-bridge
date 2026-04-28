@@ -43,7 +43,7 @@ export class JsonLineBuffer<T = unknown> {
     this.pending = lines.pop() ?? "";
 
     if (lines.length === 0) {
-      assertLineSize(this.pending, this.maxLineBytes);
+      this.assertPendingLineSize();
       return [];
     }
 
@@ -60,8 +60,17 @@ export class JsonLineBuffer<T = unknown> {
       }
     }
 
-    assertLineSize(this.pending, this.maxLineBytes);
+    this.assertPendingLineSize();
     return parsed;
+  }
+
+  private assertPendingLineSize(): void {
+    try {
+      assertLineSize(this.pending, this.maxLineBytes);
+    } catch (error) {
+      this.pending = "";
+      throw error;
+    }
   }
 }
 

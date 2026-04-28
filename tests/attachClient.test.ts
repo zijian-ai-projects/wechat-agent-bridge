@@ -182,6 +182,69 @@ test("runAttach waits for project switch ready before sending following prompts"
   }
 });
 
+test("runAttach waits for earlier ready commands before a project switch", async () => {
+  const socketPath = makeSocketPath();
+  const received: AttachClientMessage[] = [];
+  let clientSocket: Socket | undefined;
+  const server = createServer((socket) => {
+    clientSocket = socket;
+    const buffer = new JsonLineBuffer<AttachClientMessage>({ parse: parseAttachClientMessage });
+    socket.on("data", (chunk: Buffer) => {
+      received.push(...buffer.push(chunk.toString("utf8")));
+    });
+  });
+  const stdin = new PassThrough();
+  const stdout = captureOutput();
+  await listen(server, socketPath);
+
+  try {
+    const run = runAttach({ socketPath, stdin, stdout: stdout.stream });
+    await waitFor(() => received.some((message) => message.type === "hello"));
+    clientSocket?.write(
+      serializeAttachEvent({
+        type: "ready",
+        activeProject: "bridge",
+        projects: [{ alias: "bridge", cwd: "/tmp/bridge", ready: true, active: true }],
+      }),
+    );
+    await waitFor(() => stdout.text().includes("active project: bridge"));
+
+    stdin.write(":status\n");
+    stdin.write(":project SageTalk\n");
+    stdin.write("after switch\n");
+    await waitFor(() => received.length === 2);
+    assert.deepEqual(received[1], { type: "command", project: "bridge", name: "status" });
+
+    clientSocket?.write(
+      serializeAttachEvent({
+        type: "ready",
+        activeProject: "bridge",
+        projects: [{ alias: "bridge", cwd: "/tmp/bridge", ready: true, active: true }],
+      }),
+    );
+    await waitFor(() => received.length === 3);
+    assert.deepEqual(received[2], { type: "command", name: "project", value: "SageTalk" });
+
+    clientSocket?.write(
+      serializeAttachEvent({
+        type: "ready",
+        activeProject: "SageTalk",
+        projects: [{ alias: "SageTalk", cwd: "/tmp/sage", ready: true, active: true }],
+      }),
+    );
+    await waitFor(() => received.length === 4);
+    clientSocket?.end();
+    await run;
+
+    assert.deepEqual(received[3], { type: "prompt", project: "SageTalk", text: "after switch" });
+  } finally {
+    clientSocket?.destroy();
+    stdin.destroy();
+    await closeServer(server);
+    await rm(socketPath.split("/bridge.sock")[0], { recursive: true, force: true });
+  }
+});
+
 test("runAttach drains valid server events preserved after a bad JSONL line", async () => {
   const socketPath = makeSocketPath();
   let clientSocket: Socket | undefined;

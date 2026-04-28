@@ -41,6 +41,13 @@ test("JsonLineBuffer rejects oversized lines", () => {
   assert.throws(() => buffer.push('{"type":"hello"}'), /JSONL message exceeded 8 bytes/);
 });
 
+test("JsonLineBuffer drops oversized unterminated lines after reporting them", () => {
+  const buffer = new JsonLineBuffer({ maxLineBytes: 8 });
+
+  assert.throws(() => buffer.push("123456789"), /JSONL message exceeded 8 bytes/);
+  assert.deepEqual(buffer.push('{"a":1}\n'), [{ a: 1 }]);
+});
+
 test("JsonLineBuffer applies optional message validation", () => {
   const buffer = new JsonLineBuffer({ parse: parseAttachClientMessage });
 
