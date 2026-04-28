@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { runCodexCommandSync, type CodexSpawnSync } from "../runtime/codexCommand.js";
 
 export type CodexLoginState = "chatgpt" | "api-key" | "logged-out" | "unknown";
 
@@ -32,8 +32,8 @@ export function parseCodexLoginStatus(result: CodexLoginStatusProcessResult): Co
   return { state: "unknown", message: firstLine(message) || "Unable to determine Codex login status" };
 }
 
-export function checkCodexLoginStatus(): CodexLoginStatus {
-  const result = spawnSync("codex", ["login", "status"], { encoding: "utf8" });
+export function checkCodexLoginStatus(options: { candidates?: string[]; spawnSync?: CodexSpawnSync } = {}): CodexLoginStatus {
+  const result = runCodexCommandSync(["login", "status"], options);
   return parseCodexLoginStatus({
     status: result.status,
     stdout: result.stdout ?? "",

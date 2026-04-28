@@ -23,7 +23,7 @@ import { ProjectRuntimeManager } from "../core/ProjectRuntimeManager.js";
 import type { SessionStorePort } from "../core/types.js";
 import { AttachServer } from "../ipc/AttachServer.js";
 
-export async function runBridge(backend: AgentBackend = new CodexExecBackend()): Promise<void> {
+export async function runBridge(backend?: AgentBackend): Promise<void> {
   const config = loadConfig();
   const preflight = await runPreflight(config);
   logger.info("Codex preflight passed", { loginState: preflight.login.state, cwd: preflight.cwd });
@@ -33,7 +33,14 @@ export async function runBridge(backend: AgentBackend = new CodexExecBackend()):
   }
   const api = new WeChatApi(account.botToken, account.baseUrl);
   const sender = createWechatSender(api, account.accountId);
-  const { bridgeService, projectManager, eventBus, modelService } = await buildProjectBridgeRuntime({ account, config, sender, backend });
+  const effectiveBackend = backend ?? new CodexExecBackend(preflight.codexCommand);
+  const { bridgeService, projectManager, eventBus, modelService } = await buildProjectBridgeRuntime({
+    account,
+    config,
+    sender,
+    backend: effectiveBackend,
+    codexBin: preflight.codexCommand,
+  });
   const attachServer = new AttachServer({
     socketPath: getAttachSocketPath(),
     eventBus,
@@ -72,6 +79,7 @@ export interface BuildProjectBridgeRuntimeOptions {
   config: BridgeConfig;
   sender: WeChatSender;
   backend: AgentBackend;
+  codexBin?: string;
   sessionStore?: ProjectSessionStore;
   loadRuntimeState?: () => BridgeRuntimeState;
   saveRuntimeState?: (state: BridgeRuntimeState) => void;
@@ -94,7 +102,7 @@ export async function buildProjectBridgeRuntime(options: BuildProjectBridgeRunti
   const projectSessionStore = options.sessionStore ?? new ProjectSessionStore();
   const agentService = new AgentService(options.backend);
   const eventBus = new EventBus();
-  const modelService = new ModelService();
+  const modelService = new ModelService({ codexBin: options.codexBin });
   const projectManager = new ProjectRuntimeManager({
     account: options.account,
     catalog,

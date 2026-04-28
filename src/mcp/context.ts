@@ -14,23 +14,27 @@ export interface LoadMcpContextOptions {
 }
 
 export async function loadBridgeMcpContext(
-  backend: AgentBackend = new CodexExecBackend(),
+  backend?: AgentBackend,
   options: LoadMcpContextOptions = {},
 ): Promise<BridgeMcpContext> {
   const config = loadConfig();
+  let effectiveBackend = backend;
   const account = loadLatestAccount();
   if (!account) {
+    effectiveBackend ??= new CodexExecBackend();
     return {
       account: null,
       session: null,
       sessionStore: null,
-      agentService: new AgentService(backend),
+      agentService: new AgentService(effectiveBackend),
     };
   }
 
   if (options.runPreflightChecks ?? true) {
-    await runPreflight(config);
+    const preflight = await runPreflight(config);
+    effectiveBackend ??= new CodexExecBackend(preflight.codexCommand);
   }
+  effectiveBackend ??= new CodexExecBackend();
 
   const defaultCwd = await realpath(config.defaultCwd);
   const allowlistRoots = await Promise.all(config.allowlistRoots.map((root) => realpath(root)));
@@ -47,7 +51,7 @@ export async function loadBridgeMcpContext(
     account,
     session,
     sessionStore,
-    agentService: new AgentService(backend),
+    agentService: new AgentService(effectiveBackend),
     extraWritableRoots,
   };
 }

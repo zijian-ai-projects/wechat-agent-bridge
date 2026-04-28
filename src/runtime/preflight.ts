@@ -7,6 +7,7 @@ import { realpath } from "node:fs/promises";
 
 export interface PreflightResult {
   codexVersion?: string;
+  codexCommand?: string;
   login: CodexLoginStatus;
   cwd: string;
 }
@@ -38,5 +39,5 @@ export async function runPreflightWithChecks(
   const cwd = registry.defaultProject.cwd;
   await Promise.all((config.extraWritableRoots ?? []).map((root) => realpath(root)));
 
-  return { codexVersion: codex.version, login, cwd };
+  return { codexVersion: codex.version, codexCommand: codex.command, login, cwd };
 }

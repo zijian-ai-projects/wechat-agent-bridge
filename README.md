@@ -42,6 +42,15 @@ codex login --device-auth
 - 一个用于绑定的个人微信账号
 - 一个 `projectsRoot` 目录，本地项目作为一级子目录放在里面
 
+Windows 上如果 PowerShell 可以运行 `codex`，但 `npm run setup` 仍提示找不到 Codex CLI，先更新到包含 Windows shim 解析的最新代码。如果仍失败，可以显式指定 Codex 可执行文件：
+
+```powershell
+codex --version
+Get-Command codex
+$env:WECHAT_AGENT_BRIDGE_CODEX_BIN = (Get-Command codex).Source
+npm run setup
+```
+
 ### 从源码安装
 
 ```bash

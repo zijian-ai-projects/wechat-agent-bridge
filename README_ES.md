@@ -38,6 +38,15 @@ codex login --device-auth
 - Una cuenta personal de WeChat para vincular
 - Un directorio `projectsRoot` con los proyectos locales como subdirectorios de primer nivel
 
+En Windows, si PowerShell puede ejecutar `codex` pero `npm run setup` sigue diciendo que no encuentra el CLI de Codex, primero actualiza al código más reciente con resolución de shims de Windows. Si todavía falla, puedes indicar explícitamente el ejecutable de Codex:
+
+```powershell
+codex --version
+Get-Command codex
+$env:WECHAT_AGENT_BRIDGE_CODEX_BIN = (Get-Command codex).Source
+npm run setup
+```
+
 ### Instalar desde el Código Fuente
 
 ```bash

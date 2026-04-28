@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import type { BridgeModelSource } from "./EventBus.js";
 import type { ProjectSession } from "../session/types.js";
+import { defaultCodexCommand } from "../runtime/codexCommand.js";
 
 const CODEX_CLI_DEFAULT = "Codex CLI default";
 const DEFAULT_MODEL_CATALOG_TIMEOUT_MS = 5000;
@@ -43,7 +44,7 @@ export class ModelService {
 
   constructor(options: ModelServiceOptions = {}) {
     this.codexHome = options.codexHome ?? process.env.CODEX_HOME ?? join(homedir(), ".codex");
-    this.codexBin = options.codexBin ?? "codex";
+    this.codexBin = options.codexBin ?? defaultCodexCommand();
     this.modelCatalogTimeoutMs = options.modelCatalogTimeoutMs ?? DEFAULT_MODEL_CATALOG_TIMEOUT_MS;
   }
 

@@ -38,6 +38,15 @@ codex login --device-auth
 - 바인딩할 개인 WeChat 계정
 - 로컬 프로젝트를 1단계 하위 디렉터리로 둘 `projectsRoot` 디렉터리
 
+Windows에서 PowerShell은 `codex`를 실행할 수 있는데 `npm run setup`이 Codex CLI를 찾지 못한다면, 먼저 Windows shim 해석이 포함된 최신 코드로 업데이트하십시오. 그래도 실패하면 Codex executable을 명시적으로 지정할 수 있습니다.
+
+```powershell
+codex --version
+Get-Command codex
+$env:WECHAT_AGENT_BRIDGE_CODEX_BIN = (Get-Command codex).Source
+npm run setup
+```
+
 ### 소스에서 설치
 
 ```bash

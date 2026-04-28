@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 
 import type { AgentBackend, AgentMode, AgentTurnRequest, AgentTurnResult } from "./AgentBackend.js";
 import { extractSessionId, extractText, parseJsonLine, type CodexEvent } from "./codexEvents.js";
+import { defaultCodexCommand } from "../runtime/codexCommand.js";
 
 export interface BuildCodexArgsInput {
   prompt: string;
@@ -143,7 +144,7 @@ export class CodexExecBackend implements AgentBackend {
   private readonly children = new Map<string, ChildProcess>();
   private readonly interruptTimeoutMs = 2_000;
 
-  constructor(private readonly codexBin = "codex") {}
+  constructor(private readonly codexBin = defaultCodexCommand()) {}
 
   startTurn(
     request: AgentTurnRequest,
