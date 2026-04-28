@@ -1,7 +1,7 @@
 import type { AgentMode } from "../backend/AgentBackend.js";
 import type { SessionState } from "../session/types.js";
 
-export type BridgePromptSource = "wechat" | "attach";
+export type BridgePromptSource = "wechat";
 export type BridgeModelSource = "project override" | "codex config" | "unresolved";
 
 export type BridgeEvent =

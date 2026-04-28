@@ -4,7 +4,6 @@ import { CodexExecBackend } from "../backend/CodexExecBackend.js";
 import type { AgentBackend } from "../backend/AgentBackend.js";
 import { loadLatestAccount, type AccountData } from "../config/accounts.js";
 import { loadConfig, type BridgeConfig } from "../config/config.js";
-import { getAttachSocketPath } from "../config/paths.js";
 import { ProjectCatalog, resolveProjectsRootConfig, type ProjectDefinition } from "../config/projects.js";
 import { loadRuntimeState, saveRuntimeState, type BridgeRuntimeState } from "../config/runtimeState.js";
 import { logger } from "../logging/logger.js";
@@ -21,8 +20,6 @@ import { EventBus } from "../core/EventBus.js";
 import { ModelService } from "../core/ModelService.js";
 import { ProjectRuntimeManager } from "../core/ProjectRuntimeManager.js";
 import type { SessionStorePort } from "../core/types.js";
-import { AttachServer } from "../ipc/AttachServer.js";
-import { launchAttachTerminal } from "../ipc/attachTerminal.js";
 
 export async function runBridge(backend?: AgentBackend): Promise<void> {
   const config = loadConfig();
@@ -35,22 +32,13 @@ export async function runBridge(backend?: AgentBackend): Promise<void> {
   const api = new WeChatApi(account.botToken, account.baseUrl);
   const sender = createWechatSender(api, account.accountId);
   const effectiveBackend = backend ?? new CodexExecBackend(preflight.codexCommand);
-  const { bridgeService, projectManager, eventBus, modelService } = await buildProjectBridgeRuntime({
+  const { bridgeService, projectManager } = await buildProjectBridgeRuntime({
     account,
     config,
     sender,
     backend: effectiveBackend,
     codexBin: preflight.codexCommand,
   });
-  const attachServer = new AttachServer({
-    socketPath: getAttachSocketPath(),
-    eventBus,
-    projectManager,
-    boundUserId: account.boundUserId,
-    sendWechatText: async (text) => sender.sendText(account.boundUserId, "", text),
-    modelService,
-  });
-  await attachServer.start();
   const monitor = new WeChatMonitor(api, {
     onMessage: (message) => bridgeService.handleMessage(message),
     onSessionExpired: () => {
@@ -60,7 +48,6 @@ export async function runBridge(backend?: AgentBackend): Promise<void> {
   });
 
   const shutdown = async () => {
-    await attachServer.stop();
     await shutdownProjectBridgeRuntime(monitor, projectManager);
   };
   process.once("SIGINT", () => void shutdown());
@@ -68,22 +55,7 @@ export async function runBridge(backend?: AgentBackend): Promise<void> {
 
   logger.info("Daemon started", { accountId: account.accountId, boundUserId: account.boundUserId });
   console.log(`wechat-agent-bridge started. Bound user: ${account.boundUserId}`);
-  const attachLaunch = launchAttachTerminal({
-    cwd: process.cwd(),
-    onError: (error) => {
-      logger.warn("Failed to open desktop sync terminal", { error: error.message });
-    },
-  });
-  if (attachLaunch.launched) {
-    console.log("Desktop sync terminal opened. If it did not appear, run: npm run attach");
-  } else if (attachLaunch.reason !== "disabled") {
-    console.log(`Desktop sync terminal not opened (${attachLaunch.reason}). Run manually: npm run attach`);
-  }
-  try {
-    await monitor.run();
-  } finally {
-    await attachServer.stop();
-  }
+  await monitor.run();
 }
 
 export interface BuildProjectBridgeRuntimeOptions {

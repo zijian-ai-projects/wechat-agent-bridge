@@ -5,7 +5,7 @@
 Other Languages:
 [中文](README.md) · [日本語](README_JA.md) · [한국어](README_KO.md) · [Español](README_ES.md)
 
-wechat-agent-bridge is a personal local bridge. It listens to private messages from one bound WeChat account, sends ordinary messages to a local coding agent, and returns progress and final results back to WeChat.
+wechat-agent-bridge is a personal local bridge. It listens to private messages from one bound WeChat account, sends ordinary messages to the local Codex CLI, and returns progress and final results back to WeChat.
 
 It now supports `projectsRoot`-based multi-project sessions. You can place local repos such as `wechat-agent-bridge` and `SageTalk` under one shared project root and keep separate Codex sessions, history, mode, and model state for each one.
 
@@ -70,11 +70,7 @@ npm run setup
 npm run start
 ```
 
-This is best for debugging or temporary use. The bridge stops when the terminal exits. After startup succeeds, it opens a desktop mirroring terminal that runs `npm run attach`. If your OS blocks the popup or no new window appears, run it manually:
-
-```bash
-npm run attach
-```
+This is best for debugging or temporary use. The bridge stops when the terminal exits.
 
 ### Deploy as a Background Daemon
 
@@ -99,19 +95,6 @@ git pull
 npm install
 npm run build
 npm run daemon -- restart
-```
-
-When running from a source checkout, prefer the npm script for the desktop mirroring terminal:
-
-```bash
-npm run attach
-npm run attach -- SageTalk
-```
-
-To use `wechat-agent-bridge attach` directly, run once from the repo:
-
-```bash
-npm link
 ```
 
 ## Everyday WeChat Usage
@@ -228,35 +211,6 @@ Tools:
 
 See [docs/mcp.md](docs/mcp.md).
 
-## Desktop Mirroring Terminal
-
-`npm run start` opens one desktop mirroring terminal automatically after the foreground daemon starts. The background daemon does not open popups; attach manually when needed:
-
-```bash
-npm run attach
-npm run attach -- SageTalk
-wechat-agent-bridge attach
-wechat-agent-bridge attach SageTalk
-```
-
-Starting with a project name switches to that project first. After connecting, use `:project <name>` to switch projects.
-
-Plain input is sent as a prompt for the current project. Lines beginning with `:` are local control commands:
-
-```text
-:status
-:project SageTalk
-:model
-:model gpt-5.5
-:models
-:interrupt
-:replace redo it in this direction
-```
-
-`:model` without arguments shows the current project model state; `:model <name>` switches the current project model.
-
-Tasks started from WeChat appear in the attached terminal, and tasks started from the terminal appear in WeChat. Both sides share the same project session, mode, model, and active turn.
-
 ## Platform Support
 
 The project is Codex-first today, but its core is already structured to be agent-ready:
@@ -316,7 +270,6 @@ The MCP server reuses the same core services. It does not duplicate business log
 │   ├── commands/
 │   ├── config/
 │   ├── core/
-│   ├── ipc/
 │   ├── mcp/
 │   ├── runtime/
 │   ├── setup/

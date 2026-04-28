@@ -48,7 +48,7 @@ test("EventBus publishes events to active subscribers", async () => {
   unsubscribe();
   await bus.publish({
     type: "user_message",
-    source: "attach",
+    source: "wechat",
     project: "bridge",
     text: "ignored",
     timestamp: "2026-04-27T00:00:01.000Z",

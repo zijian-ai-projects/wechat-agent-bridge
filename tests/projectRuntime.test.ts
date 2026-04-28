@@ -422,24 +422,7 @@ test("busy-rejected prompts do not publish phantom user messages", async () => {
   await first;
 });
 
-test("attach busy prompts reject instead of sending WeChat busy notices", async () => {
-  const { manager, backend, sender } = makeManager();
-  backend.enqueue({ text: "done", waitForRelease: "bridge" });
-
-  const first = manager.runPrompt({ projectAlias: "bridge", prompt: "first", toUserId: "user-1", contextToken: "ctx", source: "attach" });
-  await waitFor(() => backend.startRequests.length === 1);
-
-  await assert.rejects(
-    manager.runPrompt({ projectAlias: "bridge", prompt: "second", toUserId: "user-1", contextToken: "ctx", source: "attach" }),
-    /Project is busy: bridge/,
-  );
-  assert.deepEqual(sender.messages, []);
-
-  backend.release("bridge");
-  await first;
-});
-
-test("attach accepted callbacks run before the runtime turn completes", async () => {
+test("accepted callbacks run before the runtime turn completes", async () => {
   const accepted: string[] = [];
   const { manager, backend } = makeManager();
   backend.enqueue({ text: "done", waitForRelease: "bridge" });
@@ -451,7 +434,6 @@ test("attach accepted callbacks run before the runtime turn completes", async ()
       prompt: "long task",
       toUserId: "user-1",
       contextToken: "ctx",
-      source: "attach",
       onAccepted: (projectAlias) => {
         accepted.push(projectAlias);
       },
@@ -468,7 +450,7 @@ test("attach accepted callbacks run before the runtime turn completes", async ()
   await run;
 });
 
-test("interrupt after attach acceptance prevents backend start before the turn begins", async () => {
+test("interrupt after prompt acceptance prevents backend start before the turn begins", async () => {
   let accepted = false;
   let modelLookupStarted = false;
   let releaseModelLookup: (() => void) | undefined;
@@ -491,7 +473,6 @@ test("interrupt after attach acceptance prevents backend start before the turn b
     prompt: "long task",
     toUserId: "user-1",
     contextToken: "ctx",
-    source: "attach",
     onAccepted: () => {
       accepted = true;
     },

@@ -5,7 +5,7 @@
 Other Languages:
 [中文](README.md) · [English](README_EN.md) · [한국어](README_KO.md) · [Español](README_ES.md)
 
-wechat-agent-bridge は個人用のローカル bridge です。ひとつの绑定済み WeChat アカウントからの私聊メッセージを監視し、通常メッセージをローカル coding agent に渡し、進捗と最終結果を WeChat に返します。
+wechat-agent-bridge は個人用のローカル bridge です。ひとつの绑定済み WeChat アカウントからの私聊メッセージを監視し、通常メッセージをローカル Codex CLI に渡し、進捗と最終結果を WeChat に返します。
 
 現在は `projectsRoot` ベースのマルチプロジェクト session に対応しています。`wechat-agent-bridge` や `SageTalk` のようなローカル repo を同じ project root 配下に置き、それぞれ独立した Codex session、history、mode、model を保持できます。
 
@@ -70,11 +70,7 @@ npm run setup
 npm run start
 ```
 
-debug や一時利用に向いています。terminal を閉じると bridge も停止します。起動に成功すると、`npm run attach` を実行する desktop mirroring terminal が自動で開きます。OS にブロックされたり新しい window が出ない場合は手動で実行してください。
-
-```bash
-npm run attach
-```
+debug や一時利用に向いています。terminal を閉じると bridge も停止します。
 
 ### バックグラウンド daemon としてデプロイ
 
@@ -99,19 +95,6 @@ git pull
 npm install
 npm run build
 npm run daemon -- restart
-```
-
-source checkout から desktop mirroring terminal を使う場合は npm script を推奨します。
-
-```bash
-npm run attach
-npm run attach -- SageTalk
-```
-
-`wechat-agent-bridge attach` を直接使いたい場合は、repo 内で一度実行します。
-
-```bash
-npm link
 ```
 
 ## Everyday WeChat Usage
@@ -228,35 +211,6 @@ Tools:
 
 詳しくは [docs/mcp.md](docs/mcp.md) を参照してください。
 
-## デスクトップ同期ターミナル
-
-`npm run start` は foreground daemon 起動後に desktop mirroring terminal を自動で開きます。background daemon は popup を開かないため、必要な場合は手動で attach してください。
-
-```bash
-npm run attach
-npm run attach -- SageTalk
-wechat-agent-bridge attach
-wechat-agent-bridge attach SageTalk
-```
-
-project 名付きで起動すると、最初にその project へ切り替えます。接続後も `:project <name>` で project を切り替えられます。
-
-通常入力は現在の project への prompt として実行されます。`:` で始まる行はローカル制御コマンドです。
-
-```text
-:status
-:project SageTalk
-:model
-:model gpt-5.5
-:models
-:interrupt
-:replace この方向でやり直して
-```
-
-`:model` は引数なしで現在の project の model 状態を表示します。`:model <name>` は現在の project の model を切り替えます。
-
-WeChat から開始した task は attach terminal に同期表示され、attach terminal から開始した task は WeChat に同期表示されます。両方とも同じ project session、mode、model、実行中 turn を共有します。
-
 ## プラットフォーム対応
 
 現在は Codex-first ですが、core は agent-ready な方向で分割されています。
@@ -316,7 +270,6 @@ MCP server は同じ core services を再利用します。業務ロジックを
 │   ├── commands/
 │   ├── config/
 │   ├── core/
-│   ├── ipc/
 │   ├── mcp/
 │   ├── runtime/
 │   ├── setup/

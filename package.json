@@ -13,7 +13,6 @@
     "test": "tsx --test tests/**/*.test.ts",
     "setup": "tsx src/main.ts setup",
     "start": "tsx src/main.ts start",
-    "attach": "tsx src/main.ts attach",
     "daemon": "tsx src/main.ts daemon",
     "mcp": "tsx src/mcp-main.ts"
   },

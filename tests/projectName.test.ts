@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { APP_NAME, getAttachSocketPath, getDataDir } from "../src/config/paths.js";
+import { APP_NAME, getDataDir } from "../src/config/paths.js";
 
 const PROJECT_NAME = "wechat-agent-bridge";
 const OLD_PROJECT_NAME = "wechat-codex-bridge";
@@ -20,7 +20,7 @@ test("package metadata uses the generic agent bridge name", () => {
     [PROJECT_NAME]: "./dist/src/main.js",
     [`${PROJECT_NAME}-mcp`]: "./dist/src/mcp-main.js",
   });
-  assert.equal((packageJson.scripts as Record<string, string>).attach, "tsx src/main.ts attach");
+  assert.equal((packageJson.scripts as Record<string, string>).attach, undefined);
 });
 
 test("config paths use the new app name while accepting the legacy home env var", () => {
@@ -45,16 +45,6 @@ test("config paths use the new app name while accepting the legacy home env var"
   }
 });
 
-test("attach socket uses a Windows named pipe instead of a filesystem socket on Windows", () => {
-  const socketPath = getAttachSocketPath({
-    platform: "win32",
-    dataDir: "C:\\Users\\zijian\\.wechat-agent-bridge",
-  });
-
-  assert.match(socketPath, /^\\\\\.\\pipe\\wechat-agent-bridge-[a-f0-9]{16}$/);
-  assert.doesNotMatch(socketPath, /bridge\.sock$/);
-});
-
 test("integration manifests use the agent bridge namespace", () => {
   const plugin = readJson("integrations/codex/plugin/.codex-plugin/plugin.json");
   assert.equal(plugin.name, PROJECT_NAME);
@@ -64,13 +54,12 @@ test("integration manifests use the agent bridge namespace", () => {
   assert.doesNotMatch(mcpTemplate, new RegExp(OLD_PROJECT_NAME));
 });
 
-test("documentation covers attach cli and model catalog commands", () => {
+test("documentation focuses on WeChat to Codex CLI commands without desktop attach", () => {
   const readme = readFileSync("README.md", "utf8");
-  assert.match(readme, /## 桌面同步终端/);
-  assert.match(readme, /wechat-agent-bridge attach SageTalk/);
-  assert.match(readme, /带项目名启动时会先切换到该项目/);
-  assert.match(readme, /:model` 不带参数时显示当前项目模型状态/);
-  assert.match(readme, /:models/);
+  assert.doesNotMatch(readme, /桌面同步终端/);
+  assert.doesNotMatch(readme, /wechat-agent-bridge attach/);
+  assert.doesNotMatch(readme, /npm run attach/);
+  assert.match(readme, /微信发给 Codex CLI/);
 
   const commands = readFileSync("docs/commands.md", "utf8");
   assert.match(commands, /## \/models/);
@@ -78,12 +67,12 @@ test("documentation covers attach cli and model catalog commands", () => {
   assert.match(commands, /模型来源可能是 `project override`、`codex config` 或 `unresolved`/);
 
   const integrations = readFileSync("docs/integrations.md", "utf8");
-  assert.match(integrations, /wechat-agent-bridge attach <project>/);
-  assert.match(integrations, /not the official Codex TUI/);
+  assert.doesNotMatch(integrations, /wechat-agent-bridge attach/);
+  assert.doesNotMatch(integrations, /desktop mirroring/i);
 
   const skill = readFileSync("integrations/codex/plugin/skills/wechat-agent-bridge/SKILL.md", "utf8");
   assert.match(skill, /## Available MCP Tools/);
   assert.match(skill, /## Local CLI And Chat Commands/);
-  assert.match(skill, /wechat-agent-bridge attach \[project\]/);
-  assert.match(skill, /\/models` and `:models/);
+  assert.doesNotMatch(skill, /attach/);
+  assert.match(skill, /\/models/);
 });

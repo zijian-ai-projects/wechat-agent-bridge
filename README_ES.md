@@ -5,7 +5,7 @@
 Other Languages:
 [中文](README.md) · [English](README_EN.md) · [日本語](README_JA.md) · [한국어](README_KO.md)
 
-wechat-agent-bridge es un bridge local personal. Escucha mensajes privados de una cuenta de WeChat vinculada, envía los mensajes normales a un coding agent local y devuelve el progreso y el resultado final a WeChat.
+wechat-agent-bridge es un bridge local personal. Escucha mensajes privados de una cuenta de WeChat vinculada, envía los mensajes normales al Codex CLI local y devuelve el progreso y el resultado final a WeChat.
 
 Ahora también soporta sesiones multi‑proyecto basadas en `projectsRoot`. Puedes colocar repos locales como `wechat-agent-bridge` y `SageTalk` bajo una misma carpeta raíz de proyectos y mantener por separado el session, history, mode y model de Codex para cada proyecto.
 
@@ -70,11 +70,7 @@ npm run setup
 npm run start
 ```
 
-Es útil para debug o uso temporal. El bridge se detiene cuando se cierra la terminal. Cuando el arranque termina correctamente, abre automáticamente una terminal de sincronización que ejecuta `npm run attach`. Si el sistema bloquea el popup o no aparece una ventana nueva, ejecútala manualmente:
-
-```bash
-npm run attach
-```
+Es útil para debug o uso temporal. El bridge se detiene cuando se cierra la terminal.
 
 ### Desplegar como Daemon en Segundo Plano
 
@@ -99,19 +95,6 @@ git pull
 npm install
 npm run build
 npm run daemon -- restart
-```
-
-Si ejecutas desde un checkout del código fuente, usa preferentemente el script npm para la terminal de sincronización de escritorio:
-
-```bash
-npm run attach
-npm run attach -- SageTalk
-```
-
-Para usar `wechat-agent-bridge attach` directamente, ejecuta una vez desde el repo:
-
-```bash
-npm link
 ```
 
 ## Uso Diario en WeChat
@@ -228,35 +211,6 @@ Tools:
 
 Consulta [docs/mcp.md](docs/mcp.md).
 
-## Terminal de Sincronización de Escritorio
-
-`npm run start` abre automáticamente una terminal de sincronización cuando el daemon en primer plano arranca correctamente. El daemon en segundo plano no abre popups; conéctate manualmente cuando lo necesites:
-
-```bash
-npm run attach
-npm run attach -- SageTalk
-wechat-agent-bridge attach
-wechat-agent-bridge attach SageTalk
-```
-
-Si arrancas con un nombre de proyecto, primero cambia a ese proyecto. Una vez conectado, también puedes usar `:project <name>` para cambiar de proyecto.
-
-La entrada normal se ejecuta como prompt del proyecto actual. Las líneas que empiezan con `:` son comandos locales de control:
-
-```text
-:status
-:project SageTalk
-:model
-:model gpt-5.5
-:models
-:interrupt
-:replace rehacer en esta dirección
-```
-
-`:model` sin argumentos muestra el estado del modelo del proyecto actual; `:model <name>` cambia el modelo del proyecto actual.
-
-Las tareas iniciadas desde WeChat aparecen en la terminal attach, y las tareas iniciadas desde la terminal aparecen en WeChat. Ambos lados comparten la misma session, mode, model y turn activo del proyecto.
-
 ## Soporte de Plataformas
 
 Hoy el proyecto es Codex-first, pero el core ya está organizado para ser agent-ready:
@@ -316,7 +270,6 @@ El MCP server reutiliza los mismos core services. No duplica lógica de negocio 
 │   ├── commands/
 │   ├── config/
 │   ├── core/
-│   ├── ipc/
 │   ├── mcp/
 │   ├── runtime/
 │   ├── setup/

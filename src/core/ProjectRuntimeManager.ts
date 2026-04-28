@@ -143,14 +143,13 @@ export class ProjectRuntimeManager {
               })
               .catch(() => undefined);
           } catch {
-            // Attach acceptance must not depend on event subscriber health.
+            // Prompt acceptance must not depend on event subscriber health.
           }
           options.onAccepted?.(alias);
         },
       });
     } catch (error) {
       if (!(error instanceof BusyProjectError)) throw error;
-      if (options.source === "attach") throw error;
       await this.sender.sendText(
         options.toUserId,
         options.contextToken,
