@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -86,3 +86,72 @@ test("parseCodexModelCatalog ignores warnings and sanitizes raw catalog entries"
   assert.deepEqual(catalog.models[0]?.supportedReasoningLevels, [{ effort: "low", description: "Fast" }]);
   assert.equal("base_instructions" in catalog.models[0]!, false);
 });
+
+test("parseCodexModelCatalog tolerates malformed catalog shape", () => {
+  assert.deepEqual(parseCodexModelCatalog(JSON.stringify({ models: {} })), { models: [] });
+  assert.deepEqual(parseCodexModelCatalog(JSON.stringify({ models: [{ slug: "ok", supported_reasoning_levels: [null, "bad"] }] })), {
+    models: [{ slug: "ok", supportedReasoningLevels: [] }],
+  });
+});
+
+test("ModelService listModels invokes codex debug models and parses sanitized output", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wcb-model-bin-"));
+  const bin = join(dir, "fake-codex.mjs");
+  const argsPath = join(dir, "args.txt");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(argsPath)}, process.argv.slice(2).join(" "));
+console.log("WARNING: proceeding");
+console.log(JSON.stringify({ models: [{ slug: "gpt-5.5", display_name: "GPT-5.5", base_instructions: "do not expose" }] }));
+`,
+    { mode: 0o700 },
+  );
+  const service = new ModelService({ codexBin: bin });
+
+  const catalog = await service.listModels();
+
+  assert.equal(readFileText(argsPath), "debug models");
+  assert.deepEqual(catalog.models, [{ slug: "gpt-5.5", displayName: "GPT-5.5" }]);
+});
+
+test("ModelService listModels throws sanitized errors for command failures", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wcb-model-bin-"));
+  const bin = join(dir, "fake-codex.mjs");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+console.error("SECRET_STDERR");
+process.exit(2);
+`,
+    { mode: 0o700 },
+  );
+  const service = new ModelService({ codexBin: bin, modelCatalogTimeoutMs: 100 });
+
+  await assert.rejects(() => service.listModels(), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /Unable to read Codex model catalog/);
+    assert.doesNotMatch(error.message, /SECRET_STDERR/);
+    return true;
+  });
+});
+
+test("ModelService listModels times out hung catalog commands", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wcb-model-bin-"));
+  const bin = join(dir, "fake-codex.mjs");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+setInterval(() => {}, 1000);
+`,
+    { mode: 0o700 },
+  );
+  const service = new ModelService({ codexBin: bin, modelCatalogTimeoutMs: 20 });
+
+  await assert.rejects(() => service.listModels(), /Unable to read Codex model catalog/);
+});
+
+function readFileText(path: string): string {
+  return readFileSync(path, "utf8");
+}
