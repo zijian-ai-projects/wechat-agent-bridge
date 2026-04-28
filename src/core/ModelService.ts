@@ -39,6 +39,7 @@ export class ModelService {
   private readonly codexHome: string;
   private readonly codexBin: string;
   private readonly modelCatalogTimeoutMs: number;
+  private codexDefaultModelPromise?: Promise<string | undefined>;
 
   constructor(options: ModelServiceOptions = {}) {
     this.codexHome = options.codexHome ?? process.env.CODEX_HOME ?? join(homedir(), ".codex");
@@ -68,6 +69,11 @@ export class ModelService {
   }
 
   private async readCodexDefaultModel(): Promise<string | undefined> {
+    this.codexDefaultModelPromise ??= this.loadCodexDefaultModel();
+    return this.codexDefaultModelPromise;
+  }
+
+  private async loadCodexDefaultModel(): Promise<string | undefined> {
     try {
       return parseCodexDefaultModel(await readFile(join(this.codexHome, "config.toml"), "utf8"));
     } catch {

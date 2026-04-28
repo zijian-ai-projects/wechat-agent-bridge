@@ -396,6 +396,20 @@ test("project-aware /status targeted details show effective model source", async
   assert.match(result.reply ?? "", /模型来源: project override/);
 });
 
+test("legacy /status shows effective model source", async () => {
+  const root = await realpath(mkdtempSync(join(tmpdir(), "wcb-cmd-")));
+  const session = createSession(root);
+  session.model = "gpt-5.5";
+
+  const result = await routeCommand({ text: "/status", session, modelService: new FakeModelService(), boundUserId: "user-1" });
+
+  assert.equal(result.handled, true);
+  assert.match(result.reply ?? "", /模型: gpt-5\.5/);
+  assert.match(result.reply ?? "", /模型来源: project override/);
+
+  await rm(root, { recursive: true, force: true });
+});
+
 test("project-aware /history accepts optional project alias and positive limit", async () => {
   const projectManager = new FakeProjectManager();
   const sage = await projectManager.session("SageTalk");

@@ -50,6 +50,20 @@ test("ModelService reports Codex config default when no override exists", async 
   assert.equal(state.source, "codex config");
 });
 
+test("ModelService caches Codex config default per service instance", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wcb-model-"));
+  const configPath = join(dir, "config.toml");
+  writeFileSync(configPath, 'model = "gpt-5.4"\n');
+  const service = new ModelService({ codexHome: dir });
+
+  const first = await service.describeSession(session());
+  writeFileSync(configPath, 'model = "gpt-5.5"\n');
+  const second = await service.describeSession(session());
+
+  assert.equal(first.effectiveModel, "gpt-5.4");
+  assert.equal(second.effectiveModel, "gpt-5.4");
+});
+
 test("ModelService falls back to unresolved Codex CLI default", async () => {
   const dir = mkdtempSync(join(tmpdir(), "wcb-model-"));
   const service = new ModelService({ codexHome: dir });
