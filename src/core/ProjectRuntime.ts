@@ -106,6 +106,7 @@ export class ProjectRuntime {
       }
 
       const modelState = await this.describeModelState(session);
+      if (session.activeTurnId !== turnId) return;
       this.publishEvent({
         type: "turn_started",
         source: options.source ?? "wechat",

@@ -468,6 +468,43 @@ test("attach accepted callbacks run before the runtime turn completes", async ()
   await run;
 });
 
+test("interrupt after attach acceptance prevents backend start before the turn begins", async () => {
+  let accepted = false;
+  let modelLookupStarted = false;
+  let releaseModelLookup: (() => void) | undefined;
+  const { manager, backend } = makeManager({
+    modelService: {
+      describeSession: async () => {
+        if (!modelLookupStarted) {
+          modelLookupStarted = true;
+          await new Promise<void>((resolve) => {
+            releaseModelLookup = resolve;
+          });
+        }
+        return { effectiveModel: "gpt-5.5", source: "project override" };
+      },
+    },
+  });
+
+  const run = manager.runPrompt({
+    projectAlias: "bridge",
+    prompt: "long task",
+    toUserId: "user-1",
+    contextToken: "ctx",
+    source: "attach",
+    onAccepted: () => {
+      accepted = true;
+    },
+  });
+  await waitFor(() => accepted && modelLookupStarted);
+
+  await manager.interrupt("bridge");
+  releaseModelLookup?.();
+  await run;
+
+  assert.equal(backend.startRequests.length, 0);
+});
+
 test("interrupt publishes an idle state event", async () => {
   const events: BridgeEvent[] = [];
   const { manager, backend } = makeManager({

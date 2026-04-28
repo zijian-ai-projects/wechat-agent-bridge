@@ -132,15 +132,19 @@ export class ProjectRuntimeManager {
         isActive: () => alias === this.activeAlias,
         source: options.source,
         onAccepted: () => {
-          void this.eventBus
-            .publish({
-              type: "user_message",
-              source: options.source ?? "wechat",
-              project: alias,
-              text: options.prompt,
-              timestamp: nowIso(),
-            })
-            .catch(() => undefined);
+          try {
+            void this.eventBus
+              .publish({
+                type: "user_message",
+                source: options.source ?? "wechat",
+                project: alias,
+                text: options.prompt,
+                timestamp: nowIso(),
+              })
+              .catch(() => undefined);
+          } catch {
+            // Attach acceptance must not depend on event subscriber health.
+          }
           options.onAccepted?.(alias);
         },
       });
