@@ -101,6 +101,16 @@ export const COMMAND_HELP: CommandHelpEntry[] = [
     notes: ["不带参数时显示当前配置。"],
   },
   {
+    name: "models",
+    summary: "查看 Codex 可用模型目录",
+    syntax: ["/models"],
+    core: false,
+    changesProject: false,
+    interruptsRunningWork: false,
+    examples: ["/models"],
+    notes: ["模型目录来自本机 codex debug models；读取失败不会影响 /model <name>。"],
+  },
+  {
     name: "cwd",
     summary: "按路径查看或切换到已配置项目",
     syntax: ["/cwd", "/cwd <path>"],

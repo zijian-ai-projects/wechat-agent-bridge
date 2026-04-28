@@ -4,6 +4,7 @@ import { isAbsolute, normalize, resolve } from "node:path";
 import { resolveAllowedRepoRoot } from "../config/git.js";
 import { expandHome } from "../config/security.js";
 import type { AgentMode } from "../backend/AgentBackend.js";
+import { ModelService, type ModelCatalog, type ModelState } from "../core/ModelService.js";
 import type { ProjectRuntimeManager } from "../core/ProjectRuntimeManager.js";
 import type { BridgeSession, ChatHistoryEntry, ProjectSession } from "../session/types.js";
 import { formatHelpDetail, formatHelpOverview } from "./helpCatalog.js";
@@ -22,6 +23,8 @@ export type CommandProjectManager = Pick<
   | "session"
 >;
 
+export type CommandModelService = Pick<ModelService, "describeSession" | "listModels">;
+
 interface ProjectListItem {
   alias: string;
   cwd: string;
@@ -38,6 +41,7 @@ export interface CommandContext {
   contextToken?: string;
   clearSession?: () => Promise<BridgeSession>;
   formatHistory?: (limit?: number) => string;
+  modelService?: CommandModelService;
 }
 
 export interface CommandResult {
@@ -161,14 +165,25 @@ export async function handleCwd(ctx: CommandContext, args: string): Promise<Comm
 
 export async function handleModel(ctx: CommandContext, args: string): Promise<CommandResult> {
   if (ctx.projectManager) {
-    return handleProjectModel(ctx.projectManager, args);
+    return handleProjectModel(ctx, args);
   }
   const session = requireSession(ctx);
   if (!args.trim()) {
-    return { handled: true, reply: `当前模型: ${session.model ?? "Codex 默认"}\n用法: /model <name>` };
+    const state = await modelServiceFrom(ctx).describeSession(session);
+    return { handled: true, reply: `${formatCurrentModelState(state)}\n用法: /model <name>` };
   }
   session.model = args.trim();
   return { handled: true, reply: `模型已切换为: ${session.model ?? "Codex 默认"}` };
+}
+
+export async function handleModels(ctx: CommandContext): Promise<CommandResult> {
+  try {
+    const catalog = await modelServiceFrom(ctx).listModels();
+    return { handled: true, reply: formatModelCatalog(catalog) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { handled: true, reply: `无法读取 Codex 模型目录: ${message}` };
+  }
 }
 
 const MODES: AgentMode[] = ["readonly", "workspace", "yolo"];
@@ -198,6 +213,7 @@ export async function handleStatus(ctx: CommandContext, args = ""): Promise<Comm
     return handleProjectStatus(ctx, args);
   }
   const session = requireSession(ctx);
+  const state = await modelServiceFrom(ctx).describeSession(session);
   return {
     handled: true,
     reply: [
@@ -206,7 +222,8 @@ export async function handleStatus(ctx: CommandContext, args = ""): Promise<Comm
       `状态: ${session.state}`,
       `工作目录: ${session.cwd}`,
       `模式: ${session.mode}`,
-      `模型: ${session.model ?? "Codex 默认"}`,
+      `模型: ${state.effectiveModel}`,
+      `模型来源: ${state.source}`,
       `Codex session: ${session.codexSessionId ?? "无"}`,
       `历史条数: ${session.history.length}`,
     ].join("\n"),
@@ -248,6 +265,10 @@ function requireProjectManager(ctx: CommandContext): CommandProjectManager {
     throw new CommandUserError("当前会话不支持项目命令。");
   }
   return ctx.projectManager;
+}
+
+function modelServiceFrom(ctx: CommandContext): CommandModelService {
+  return ctx.modelService ?? new ModelService();
 }
 
 function formatProjectList(projects: ProjectListItem[], activeAlias: string): string {
@@ -416,16 +437,18 @@ export function formatProjectInitReply(alias: string): string {
   return `项目 ${alias} 还不是 Git 仓库。发送 /project ${alias} --init 初始化并切换。`;
 }
 
-async function handleProjectModel(manager: CommandProjectManager, args: string): Promise<CommandResult> {
+async function handleProjectModel(ctx: CommandContext, args: string): Promise<CommandResult> {
+  const manager = requireProjectManager(ctx);
   const parsed = await splitProjectPositionArg(manager, args);
   if (parsed.unknownAlias) return unknownProject(parsed.unknownAlias, manager);
   const alias = parsed.alias;
   const modelArg = alias ? parsed.rest : args;
   if (!modelArg.trim()) {
     const session = await manager.session(alias);
+    const state = await modelServiceFrom(ctx).describeSession(session);
     return {
       handled: true,
-      reply: `当前项目: ${alias ?? manager.activeProjectAlias}\n当前模型: ${session.model ?? "Codex 默认"}\n用法: /model [project] <name>`,
+      reply: `当前项目: ${alias ?? manager.activeProjectAlias}\n${formatCurrentModelState(state)}\n用法: /model [project] <name>`,
     };
   }
   const session = await manager.setModel(alias, modelArg);
@@ -454,17 +477,20 @@ async function handleProjectMode(manager: CommandProjectManager, args: string): 
 
 async function handleProjectStatus(ctx: CommandContext, args: string): Promise<CommandResult> {
   const manager = requireProjectManager(ctx);
+  const modelService = modelServiceFrom(ctx);
   const alias = args.trim();
   if (alias) {
     if (!(await hasProject(manager, alias))) return unknownProject(alias, manager);
     const session = await manager.session(alias);
-    return { handled: true, reply: formatProjectSessionStatus(ctx.boundUserId, session) };
+    const state = await modelService.describeSession(session);
+    return { handled: true, reply: formatProjectSessionStatus(ctx.boundUserId, session, state) };
   }
   const lines = ["项目状态", `用户: ${ctx.boundUserId}`, `当前项目: ${manager.activeProjectAlias}`];
   for (const project of await manager.listProjects()) {
     const session = await manager.session(project.alias);
+    const state = await modelService.describeSession(session);
     lines.push(
-      `${project.active ? "*" : " "} ${project.alias} | ${session.state} | ${session.mode} | ${session.model ?? "Codex 默认"} | ${session.cwd}`,
+      `${project.active ? "*" : " "} ${project.alias} | ${session.state} | ${session.mode} | 模型: ${state.effectiveModel} | 模型来源: ${state.source} | ${session.cwd}`,
     );
   }
   return { handled: true, reply: lines.join("\n") };
@@ -483,7 +509,7 @@ async function handleProjectHistory(manager: CommandProjectManager, args: string
   return { handled: true, reply: `项目 ${session.projectAlias} 历史:\n${formatHistoryEntries(session.history, limit)}` };
 }
 
-function formatProjectSessionStatus(boundUserId: string, session: ProjectSession): string {
+function formatProjectSessionStatus(boundUserId: string, session: ProjectSession, state: ModelState): string {
   return [
     "项目会话状态",
     `项目: ${session.projectAlias}`,
@@ -491,10 +517,31 @@ function formatProjectSessionStatus(boundUserId: string, session: ProjectSession
     `状态: ${session.state}`,
     `工作目录: ${session.cwd}`,
     `模式: ${session.mode}`,
-    `模型: ${session.model ?? "Codex 默认"}`,
+    `模型: ${state.effectiveModel}`,
+    `模型来源: ${state.source}`,
     `Codex session: ${session.codexSessionId ?? "无"}`,
     `历史条数: ${session.history.length}`,
   ].join("\n");
+}
+
+function formatCurrentModelState(state: ModelState): string {
+  return [`当前模型: ${state.effectiveModel}`, `模型来源: ${state.source}`].join("\n");
+}
+
+function formatModelCatalog(catalog: ModelCatalog): string {
+  if (catalog.models.length === 0) {
+    return "Codex 模型目录:\n（未找到可用模型）";
+  }
+  return ["Codex 模型目录:", ...catalog.models.map((model) => formatModelCatalogEntry(model))].join("\n");
+}
+
+function formatModelCatalogEntry(model: ModelCatalog["models"][number]): string {
+  const display = model.displayName ? ` (${model.displayName})` : "";
+  const details = [
+    model.defaultReasoningLevel ? `reasoning: ${model.defaultReasoningLevel}` : undefined,
+    model.description,
+  ].filter((item): item is string => Boolean(item));
+  return `- ${model.slug}${display}${details.length ? ` | ${details.join(" | ")}` : ""}`;
 }
 
 function formatHistoryEntries(history: ChatHistoryEntry[], limit: number): string {

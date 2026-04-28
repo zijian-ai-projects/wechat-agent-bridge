@@ -6,6 +6,7 @@ import {
   handleInterrupt,
   handleMode,
   handleModel,
+  handleModels,
   handleProject,
   handleReplace,
   handleStatus,
@@ -46,6 +47,8 @@ export async function routeCommand(ctx: CommandContext): Promise<CommandResult> 
         return await handleCwd(ctx, args);
       case "model":
         return await handleModel(ctx, args);
+      case "models":
+        return await handleModels(ctx);
       case "mode":
         return await handleMode(ctx, args);
       case "history":

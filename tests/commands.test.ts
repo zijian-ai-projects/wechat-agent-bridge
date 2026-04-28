@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 
 import { routeCommand } from "../src/commands/router.js";
 import type { AgentMode } from "../src/backend/AgentBackend.js";
+import type { ModelCatalog, ModelState } from "../src/core/ModelService.js";
 import type { BridgeSession, ProjectSession } from "../src/session/types.js";
 
 function createSession(root: string): BridgeSession {
@@ -128,6 +129,42 @@ class FakeProjectManager {
   }
 }
 
+class FakeModelService {
+  catalog: ModelCatalog = {
+    models: [
+      {
+        slug: "gpt-5.5",
+        displayName: "GPT-5.5",
+        defaultReasoningLevel: "medium",
+        description: "Frontier coding model",
+      },
+    ],
+  };
+  failure?: Error;
+
+  async describeSession(session: Pick<ProjectSession, "model">): Promise<ModelState> {
+    const configuredModel = session.model?.trim() || undefined;
+    if (configuredModel) {
+      return {
+        configuredModel,
+        codexDefaultModel: "gpt-default",
+        effectiveModel: configuredModel,
+        source: "project override",
+      };
+    }
+    return {
+      codexDefaultModel: "gpt-default",
+      effectiveModel: "gpt-default",
+      source: "codex config",
+    };
+  }
+
+  async listModels(): Promise<ModelCatalog> {
+    if (this.failure) throw this.failure;
+    return this.catalog;
+  }
+}
+
 test("/mode switches among safe modes and requires explicit yolo", async () => {
   const root = await realpath(mkdtempSync(join(tmpdir(), "wcb-cmd-")));
   const session = createSession(root);
@@ -228,6 +265,16 @@ test("/help help shows detailed syntax for command help", async () => {
   assert.match(result.reply ?? "", /\/help <command>/);
 });
 
+test("/help models shows model catalog command details", async () => {
+  const projectManager = new FakeProjectManager();
+
+  const result = await routeCommand({ text: "/help models", projectManager, boundUserId: "user-1" });
+
+  assert.equal(result.handled, true);
+  assert.match(result.reply ?? "", /命令: \/models/);
+  assert.match(result.reply ?? "", /codex debug models/i);
+});
+
 test("/project lists projects and switches the active project", async () => {
   const projectManager = new FakeProjectManager();
 
@@ -318,13 +365,14 @@ test("/replace treats a non-alias first token as part of the active prompt", asy
 
 test("project-aware /status shows overview and targeted session details", async () => {
   const projectManager = new FakeProjectManager();
+  const modelService = new FakeModelService();
   const sage = await projectManager.session("SageTalk");
   sage.state = "processing";
   sage.model = "gpt-sage";
   sage.history.push({ role: "user", content: "hello", timestamp: "2026-01-01T00:00:00.000Z" });
 
-  const overview = await routeCommand({ text: "/status", projectManager, boundUserId: "user-1" });
-  const targeted = await routeCommand({ text: "/status SageTalk", projectManager, boundUserId: "user-1" });
+  const overview = await routeCommand({ text: "/status", projectManager, modelService, boundUserId: "user-1" });
+  const targeted = await routeCommand({ text: "/status SageTalk", projectManager, modelService, boundUserId: "user-1" });
 
   assert.equal(overview.handled, true);
   assert.match(overview.reply ?? "", /项目状态/);
@@ -334,6 +382,18 @@ test("project-aware /status shows overview and targeted session details", async 
   assert.match(targeted.reply ?? "", /项目: SageTalk/);
   assert.match(targeted.reply ?? "", /状态: processing/);
   assert.match(targeted.reply ?? "", /历史条数: 1/);
+});
+
+test("project-aware /status targeted details show effective model source", async () => {
+  const projectManager = new FakeProjectManager();
+  const modelService = new FakeModelService();
+  await projectManager.setModel("bridge", "gpt-5.5");
+
+  const result = await routeCommand({ text: "/status bridge", projectManager, modelService, boundUserId: "user-1" });
+
+  assert.equal(result.handled, true);
+  assert.match(result.reply ?? "", /模型: gpt-5\.5/);
+  assert.match(result.reply ?? "", /模型来源: project override/);
 });
 
 test("project-aware /history accepts optional project alias and positive limit", async () => {
@@ -436,6 +496,18 @@ test("project-aware /model changes only when a non-empty model name is provided"
   assert.match(whitespace.reply ?? "", /gpt-5.4-codex/);
 });
 
+test("project-aware /model without args shows effective model and source", async () => {
+  const projectManager = new FakeProjectManager();
+  const modelService = new FakeModelService();
+
+  const show = await routeCommand({ text: "/model", projectManager, modelService, boundUserId: "user-1" });
+
+  assert.equal(show.handled, true);
+  assert.match(show.reply ?? "", /当前项目: bridge/);
+  assert.match(show.reply ?? "", /当前模型: gpt-default/);
+  assert.match(show.reply ?? "", /模型来源: codex config/);
+});
+
 test("project-aware /model preserves alias-only project query behavior", async () => {
   const projectManager = new FakeProjectManager();
   await projectManager.setModel("SageTalk", "sage-model");
@@ -446,6 +518,27 @@ test("project-aware /model preserves alias-only project query behavior", async (
   assert.match(show.reply ?? "", /当前项目: SageTalk/);
   assert.match(show.reply ?? "", /sage-model/);
   assert.equal((await projectManager.session("bridge")).model, undefined);
+});
+
+test("/models lists sanitized catalog details", async () => {
+  const modelService = new FakeModelService();
+
+  const result = await routeCommand({ text: "/models", session: createSession("/tmp/bridge"), modelService, boundUserId: "user-1" });
+
+  assert.equal(result.handled, true);
+  assert.match(result.reply ?? "", /gpt-5\.5/);
+  assert.match(result.reply ?? "", /GPT-5\.5/);
+  assert.match(result.reply ?? "", /medium/);
+});
+
+test("/models failures return a user-facing message", async () => {
+  const modelService = new FakeModelService();
+  modelService.failure = new Error("catalog unavailable");
+
+  const result = await routeCommand({ text: "/models", session: createSession("/tmp/bridge"), modelService, boundUserId: "user-1" });
+
+  assert.equal(result.handled, true);
+  assert.match(result.reply ?? "", /^无法读取 Codex 模型目录: catalog unavailable/);
 });
 
 test("project-aware /clear clears the targeted project", async () => {
