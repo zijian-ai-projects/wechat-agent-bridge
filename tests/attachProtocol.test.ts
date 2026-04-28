@@ -2,7 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { parseAttachInput } from "../src/ipc/attachCommands.js";
-import { JsonLineBuffer, serializeAttachEvent, serializeAttachMessage } from "../src/ipc/protocol.js";
+import {
+  JsonLineBuffer,
+  parseAttachClientMessage,
+  serializeAttachEvent,
+  serializeAttachMessage,
+} from "../src/ipc/protocol.js";
 
 test("JsonLineBuffer emits complete JSON lines", () => {
   const buffer = new JsonLineBuffer();
@@ -11,10 +16,39 @@ test("JsonLineBuffer emits complete JSON lines", () => {
   assert.deepEqual(buffer.push('}\n{"type":"status"}\n'), [{ type: "hello" }, { type: "status" }]);
 });
 
+test("JsonLineBuffer skips blank CRLF lines", () => {
+  const buffer = new JsonLineBuffer();
+
+  assert.deepEqual(buffer.push('\r\n{"type":"hello"}\r\n\n'), [{ type: "hello" }]);
+});
+
 test("JsonLineBuffer reports invalid JSON lines as errors", () => {
   const buffer = new JsonLineBuffer();
 
   assert.throws(() => buffer.push("{bad}\n"), /Invalid JSONL message/);
+});
+
+test("JsonLineBuffer preserves later complete lines after an invalid line", () => {
+  const buffer = new JsonLineBuffer();
+
+  assert.throws(() => buffer.push('{bad}\n{"type":"hello"}\n'), /Invalid JSONL message/);
+  assert.deepEqual(buffer.push(""), [{ type: "hello" }]);
+});
+
+test("JsonLineBuffer rejects oversized lines", () => {
+  const buffer = new JsonLineBuffer({ maxLineBytes: 8 });
+
+  assert.throws(() => buffer.push('{"type":"hello"}'), /JSONL message exceeded 8 bytes/);
+});
+
+test("JsonLineBuffer applies optional message validation", () => {
+  const buffer = new JsonLineBuffer({ parse: parseAttachClientMessage });
+
+  assert.deepEqual(buffer.push('{"type":"hello","client":"attach-cli","project":"bridge"}\n'), [
+    { type: "hello", client: "attach-cli", project: "bridge" },
+  ]);
+  assert.throws(() => buffer.push('{"type":"command","name":"replace"}\n'), /Invalid attach client message/);
+  assert.throws(() => buffer.push("null\n"), /Invalid attach client message/);
 });
 
 test("serializeAttachEvent writes one JSON object per line", () => {
@@ -31,11 +65,11 @@ test("serializeAttachMessage writes one JSON object per line", () => {
 test("parseAttachInput maps plain text and colon commands", () => {
   assert.deepEqual(parseAttachInput("fix tests", "bridge"), { type: "prompt", project: "bridge", text: "fix tests" });
   assert.deepEqual(parseAttachInput(":interrupt", "bridge"), { type: "command", project: "bridge", name: "interrupt" });
-  assert.deepEqual(parseAttachInput(":replace retry this", "bridge"), {
+  assert.deepEqual(parseAttachInput(":replace retry   this", "bridge"), {
     type: "command",
     project: "bridge",
     name: "replace",
-    text: "retry this",
+    text: "retry   this",
   });
   assert.deepEqual(parseAttachInput(":model gpt-5.5", "bridge"), {
     type: "command",
@@ -58,4 +92,9 @@ test("parseAttachInput preserves prompt whitespace but ignores empty input", () 
 
 test("parseAttachInput ignores unknown colon commands", () => {
   assert.equal(parseAttachInput(":unknown", "bridge"), undefined);
+});
+
+test("parseAttachInput ignores empty replace commands", () => {
+  assert.equal(parseAttachInput(":replace", "bridge"), undefined);
+  assert.equal(parseAttachInput(":replace   ", "bridge"), undefined);
 });
