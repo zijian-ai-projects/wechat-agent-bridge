@@ -82,6 +82,7 @@ test("runAttach connects, prints ready state, and forwards terminal input", asyn
     ]);
     assert.match(stdout.text(), /connected to wechat-agent-bridge/);
   } finally {
+    clientSocket?.destroy();
     stdin.destroy();
     await closeServer(server);
     await rm(socketPath.split("/bridge.sock")[0], { recursive: true, force: true });
@@ -129,6 +130,58 @@ test("runAttach buffers terminal input until ready establishes the active projec
   }
 });
 
+test("runAttach waits for project switch ready before sending following prompts", async () => {
+  const socketPath = makeSocketPath();
+  const received: AttachClientMessage[] = [];
+  let clientSocket: Socket | undefined;
+  const server = createServer((socket) => {
+    clientSocket = socket;
+    const buffer = new JsonLineBuffer<AttachClientMessage>({ parse: parseAttachClientMessage });
+    socket.on("data", (chunk: Buffer) => {
+      received.push(...buffer.push(chunk.toString("utf8")));
+    });
+  });
+  const stdin = new PassThrough();
+  const stdout = captureOutput();
+  await listen(server, socketPath);
+
+  try {
+    const run = runAttach({ socketPath, stdin, stdout: stdout.stream });
+    await waitFor(() => received.some((message) => message.type === "hello"));
+    clientSocket?.write(
+      serializeAttachEvent({
+        type: "ready",
+        activeProject: "bridge",
+        projects: [{ alias: "bridge", cwd: "/tmp/bridge", ready: true, active: true }],
+      }),
+    );
+    await waitFor(() => stdout.text().includes("active project: bridge"));
+
+    stdin.write(":project SageTalk\n");
+    stdin.write("after switch\n");
+    await waitFor(() => received.length === 2);
+    assert.deepEqual(received[1], { type: "command", name: "project", value: "SageTalk" });
+
+    clientSocket?.write(
+      serializeAttachEvent({
+        type: "ready",
+        activeProject: "SageTalk",
+        projects: [{ alias: "SageTalk", cwd: "/tmp/sage", ready: true, active: true }],
+      }),
+    );
+    await waitFor(() => received.length === 3);
+    clientSocket?.end();
+    await run;
+
+    assert.deepEqual(received[2], { type: "prompt", project: "SageTalk", text: "after switch" });
+  } finally {
+    clientSocket?.destroy();
+    stdin.destroy();
+    await closeServer(server);
+    await rm(socketPath.split("/bridge.sock")[0], { recursive: true, force: true });
+  }
+});
+
 test("runAttach drains valid server events preserved after a bad JSONL line", async () => {
   const socketPath = makeSocketPath();
   let clientSocket: Socket | undefined;
@@ -142,12 +195,39 @@ test("runAttach drains valid server events preserved after a bad JSONL line", as
   try {
     const run = runAttach({ socketPath, stdin: new PassThrough(), stdout: stdout.stream });
     await waitFor(() => Boolean(clientSocket));
-    clientSocket?.write(`{bad}\n${serializeAttachEvent({ type: "codex_event", project: "bridge", text: "still delivered", timestamp: "2026-04-27T00:00:00.000Z" })}`);
+    clientSocket?.write(
+      `{bad}\n${serializeAttachEvent({
+        type: "ready",
+        activeProject: "bridge",
+        projects: [{ alias: "bridge", cwd: "/tmp/bridge", ready: true, active: true }],
+      })}${serializeAttachEvent({ type: "codex_event", project: "bridge", text: "still delivered", timestamp: "2026-04-27T00:00:00.000Z" })}`,
+    );
     await waitFor(() => stdout.text().includes("still delivered"));
     clientSocket?.end();
     await run;
 
     assert.match(stdout.text(), /error: Invalid JSONL message/);
+  } finally {
+    await closeServer(server);
+    await rm(socketPath.split("/bridge.sock")[0], { recursive: true, force: true });
+  }
+});
+
+test("runAttach rejects when the daemon closes before ready", async () => {
+  const socketPath = makeSocketPath();
+  let acceptedConnection = false;
+  const server = createServer((socket) => {
+    acceptedConnection = true;
+    setImmediate(() => socket.destroy());
+  });
+  const stdout = captureOutput();
+  await listen(server, socketPath);
+
+  try {
+    const run = runAttach({ socketPath, stdin: new PassThrough(), stdout: stdout.stream });
+    const rejected = assert.rejects(run, /closed before ready/);
+    await waitFor(() => acceptedConnection);
+    await rejected;
   } finally {
     await closeServer(server);
     await rm(socketPath.split("/bridge.sock")[0], { recursive: true, force: true });

@@ -5,7 +5,7 @@ import type { Readable, Writable } from "node:stream";
 
 import { getAttachSocketPath } from "../config/paths.js";
 import { parseAttachInput } from "./attachCommands.js";
-import { JsonLineBuffer, serializeAttachMessage, type AttachServerEvent } from "./protocol.js";
+import { JsonLineBuffer, serializeAttachMessage, type AttachClientMessage, type AttachServerEvent } from "./protocol.js";
 
 export interface RunAttachOptions {
   project?: string;
@@ -24,17 +24,24 @@ export async function runAttach(options: RunAttachOptions = {}): Promise<void> {
   let activeProject = options.project;
   let inputClosed = false;
   let ready = false;
+  let waitingForProjectReady = false;
   const pendingInput: string[] = [];
 
   return await new Promise<void>((resolve, reject) => {
-    const finish = once(() => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
       closeReadline(readline);
       resolve();
-    });
-    const fail = once((error: Error) => {
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
       closeReadline(readline);
+      socket.destroy();
       reject(error);
-    });
+    };
 
     socket.once("connect", () => {
       socket.write(serializeAttachMessage({ type: "hello", client: "attach-cli", ...(options.project ? { project: options.project } : {}) }));
@@ -57,18 +64,29 @@ export async function runAttach(options: RunAttachOptions = {}): Promise<void> {
       output.write("Start it with: npm run start or npm run daemon -- start\n");
       fail(new Error(message));
     });
-    socket.once("close", finish);
-
-    readline.on("line", (line) => {
+    socket.once("end", () => {
+      if (!ready) fail(new Error("Attach daemon closed before ready"));
+      else if (waitingForProjectReady || pendingInput.length > 0) fail(new Error("Attach daemon closed before pending input was delivered"));
+    });
+    socket.once("close", () => {
       if (!ready) {
-        pendingInput.push(line);
+        fail(new Error("Attach daemon closed before ready"));
         return;
       }
-      writeInputLine(socket, line, activeProject);
+      if (waitingForProjectReady || pendingInput.length > 0) {
+        fail(new Error("Attach daemon closed before pending input was delivered"));
+        return;
+      }
+      finish();
+    });
+
+    readline.on("line", (line) => {
+      pendingInput.push(line);
+      processInputQueue();
     });
     readline.once("close", () => {
       inputClosed = true;
-      endIfInputComplete(socket, ready, pendingInput);
+      processInputQueue();
     });
 
     function processServerEvents(events: AttachServerEvent[]): void {
@@ -76,13 +94,26 @@ export async function runAttach(options: RunAttachOptions = {}): Promise<void> {
         if (event.type === "ready") {
           activeProject = event.activeProject;
           ready = true;
+          waitingForProjectReady = false;
         }
         output.write(`${renderAttachEvent(event)}\n`);
       }
-      if (ready) {
-        flushPendingInput(socket, pendingInput, activeProject);
-        endIfInputComplete(socket, inputClosed, pendingInput);
+      processInputQueue();
+    }
+
+    function processInputQueue(): void {
+      if (!ready || waitingForProjectReady || socket.destroyed) return;
+      while (pendingInput.length > 0 && !waitingForProjectReady && !socket.destroyed) {
+        const line = pendingInput.shift();
+        if (line === undefined) continue;
+        const message = parseAttachInput(line, activeProject);
+        if (!message) continue;
+        socket.write(serializeAttachMessage(message));
+        if (isProjectSwitchCommand(message)) {
+          waitingForProjectReady = true;
+        }
       }
+      endIfInputComplete(socket, inputClosed, pendingInput, waitingForProjectReady);
     }
   });
 }
@@ -131,30 +162,12 @@ function closeReadline(readline: Interface): void {
   }
 }
 
-function once<T extends unknown[]>(callback: (...args: T) => void): (...args: T) => void {
-  let called = false;
-  return (...args: T) => {
-    if (called) return;
-    called = true;
-    callback(...args);
-  };
+function isProjectSwitchCommand(message: AttachClientMessage): boolean {
+  return message.type === "command" && message.name === "project";
 }
 
-function flushPendingInput(socket: Socket, pendingInput: string[], activeProject?: string): void {
-  while (pendingInput.length > 0) {
-    const line = pendingInput.shift();
-    if (line !== undefined) writeInputLine(socket, line, activeProject);
-  }
-}
-
-function writeInputLine(socket: Socket, line: string, activeProject?: string): void {
-  const message = parseAttachInput(line, activeProject);
-  if (!message || socket.destroyed) return;
-  socket.write(serializeAttachMessage(message));
-}
-
-function endIfInputComplete(socket: Socket, inputClosed: boolean, pendingInput: string[]): void {
-  if (!inputClosed || pendingInput.length > 0 || socket.destroyed) return;
+function endIfInputComplete(socket: Socket, inputClosed: boolean, pendingInput: string[], waitingForProjectReady: boolean): void {
+  if (!inputClosed || pendingInput.length > 0 || waitingForProjectReady || socket.destroyed) return;
   socket.end();
 }
 

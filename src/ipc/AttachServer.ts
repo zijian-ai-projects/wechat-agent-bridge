@@ -19,7 +19,7 @@ export interface AttachServerOptions {
   eventBus: BridgeEventBus;
   projectManager: Pick<
     ProjectRuntimeManager,
-    "activeProjectAlias" | "listProjects" | "runPrompt" | "interrupt" | "replacePrompt" | "setModel"
+    "activeProjectAlias" | "listProjects" | "runPrompt" | "interrupt" | "replacePrompt" | "setModel" | "setActiveProject"
   >;
   boundUserId: string;
   sendWechatText: (text: string) => Promise<void>;
@@ -194,6 +194,13 @@ export class AttachServer {
         this.send(socket, await this.readyEvent());
         return;
       case "project":
+        if (message.value) {
+          try {
+            await this.options.projectManager.setActiveProject(message.value);
+          } catch (error) {
+            this.send(socket, { type: "error", message: errorMessage(error) });
+          }
+        }
         this.send(socket, await this.readyEvent());
         return;
       case "interrupt":

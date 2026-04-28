@@ -49,7 +49,18 @@ class FakeProjectManager {
   private releaseSetModel?: () => void;
 
   async listProjects(): Promise<Array<{ alias: string; cwd: string; ready: boolean; active: boolean }>> {
-    return [{ alias: "bridge", cwd: "/tmp/bridge", ready: true, active: true }];
+    return ["bridge", "SageTalk"].map((alias) => ({
+      alias,
+      cwd: `/tmp/${alias}`,
+      ready: true,
+      active: alias === this.activeProjectAlias,
+    }));
+  }
+
+  async setActiveProject(alias: string): Promise<{ alias: string; cwd: string; ready: boolean }> {
+    if (!["bridge", "SageTalk"].includes(alias)) throw new Error(`Unknown project: ${alias}`);
+    this.activeProjectAlias = alias;
+    return { alias, cwd: `/tmp/${alias}`, ready: true };
   }
 
   async runPrompt(options: FakeRunPromptOptions): Promise<void> {
@@ -379,7 +390,7 @@ test("AttachServer returns truthful project status and broadcasts to multiple cl
     await readNext(first.socket, first.buffer);
     await readNext(second.socket, second.buffer);
 
-    first.socket.write(serializeAttachMessage({ type: "command", name: "project", value: "missing" }));
+    first.socket.write(serializeAttachMessage({ type: "command", name: "project" }));
     const ready = await readNext(first.socket, first.buffer);
     assert.equal(ready.type, "ready");
     assert.equal(ready.activeProject, "bridge");
@@ -393,6 +404,41 @@ test("AttachServer returns truthful project status and broadcasts to multiple cl
 
     assert.equal(firstEvent.type, "codex_event");
     assert.equal(secondEvent.type, "codex_event");
+  });
+});
+
+test("AttachServer switches active project before reporting ready", async () => {
+  await withServer(async ({ socketPath, manager }) => {
+    const { socket, buffer } = await connectClient(socketPath);
+
+    socket.write(serializeAttachMessage({ type: "hello", client: "attach-cli" }));
+    assert.equal((await readNext(socket, buffer)).type, "ready");
+
+    socket.write(serializeAttachMessage({ type: "command", name: "project", value: "SageTalk" }));
+    const ready = await readNext(socket, buffer);
+    socket.end();
+
+    assert.equal(ready.type, "ready");
+    assert.equal(ready.activeProject, "SageTalk");
+    assert.equal(manager.activeProjectAlias, "SageTalk");
+    assert.equal(ready.projects.find((project) => project.alias === "SageTalk")?.active, true);
+  });
+});
+
+test("AttachServer reports project switch errors and returns current ready state", async () => {
+  await withServer(async ({ socketPath, manager }) => {
+    const { socket, buffer } = await connectClient(socketPath);
+
+    socket.write(serializeAttachMessage({ type: "command", name: "project", value: "missing" }));
+    const error = await readNext(socket, buffer);
+    const ready = await readNext(socket, buffer);
+    socket.end();
+
+    assert.equal(error.type, "error");
+    assert.match(error.message, /Unknown project: missing/);
+    assert.equal(ready.type, "ready");
+    assert.equal(ready.activeProject, "bridge");
+    assert.equal(manager.activeProjectAlias, "bridge");
   });
 });
 
