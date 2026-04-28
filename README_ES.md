@@ -33,10 +33,14 @@ codex login --device-auth
 ```text
 /project
 /project SageTalk
+/model
+/model gpt-5.5
+/models
 @SageTalk run tests and summarize failures
 ```
 
 Los mensajes normales sin `@NombreDelProyecto` van al proyecto actual.
+`/model` muestra el modelo efectivo y su origen para el proyecto actual; `/model <name>` cambia el modelo de ese proyecto; `/models` lee el catálogo local de modelos de Codex.
 
 Consulta [docs/commands.md](docs/commands.md) para la referencia completa de comandos.
 
@@ -138,6 +142,33 @@ Tools:
 
 Consulta [docs/mcp.md](docs/mcp.md).
 
+## Terminal de Sincronización de Escritorio
+
+Después de iniciar el daemon, puedes conectar una terminal local al mismo bridge runtime:
+
+```bash
+wechat-agent-bridge attach
+wechat-agent-bridge attach SageTalk
+```
+
+Si arrancas con un nombre de proyecto, primero cambia a ese proyecto. Una vez conectado, también puedes usar `:project <name>` para cambiar de proyecto.
+
+La entrada normal se ejecuta como prompt del proyecto actual. Las líneas que empiezan con `:` son comandos locales de control:
+
+```text
+:status
+:project SageTalk
+:model
+:model gpt-5.5
+:models
+:interrupt
+:replace rehacer en esta dirección
+```
+
+`:model` sin argumentos muestra el estado del modelo del proyecto actual; `:model <name>` cambia el modelo del proyecto actual.
+
+Las tareas iniciadas desde WeChat aparecen en la terminal attach, y las tareas iniciadas desde la terminal aparecen en WeChat. Ambos lados comparten la misma session, mode, model y turn activo del proyecto.
+
 ## Soporte de Plataformas
 
 Hoy el proyecto es Codex-first, pero el core ya está organizado para ser agent-ready:
@@ -194,7 +225,10 @@ El MCP server reutiliza los mismos core services. No duplica lógica de negocio 
 ├── integrations/
 ├── src/
 │   ├── backend/
+│   ├── commands/
+│   ├── config/
 │   ├── core/
+│   ├── ipc/
 │   ├── mcp/
 │   ├── runtime/
 │   ├── setup/

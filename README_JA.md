@@ -33,10 +33,14 @@ codex login --device-auth
 ```text
 /project
 /project SageTalk
+/model
+/model gpt-5.5
+/models
 @SageTalk run tests and summarize failures
 ```
 
 `@ProjectName` を付けない通常メッセージは、現在の project に送られます。
+`/model` は現在の project で実際に使われる model とその source を表示します。`/model <name>` はその project の model を切り替え、`/models` はローカル Codex の model catalog を読み取ります。
 
 完全なコマンド一覧は [docs/commands.md](docs/commands.md) を参照してください。
 
@@ -138,6 +142,33 @@ Tools:
 
 詳しくは [docs/mcp.md](docs/mcp.md) を参照してください。
 
+## デスクトップ同期ターミナル
+
+daemon 起動後、同じ bridge runtime にローカル terminal から接続できます。
+
+```bash
+wechat-agent-bridge attach
+wechat-agent-bridge attach SageTalk
+```
+
+project 名付きで起動すると、最初にその project へ切り替えます。接続後も `:project <name>` で project を切り替えられます。
+
+通常入力は現在の project への prompt として実行されます。`:` で始まる行はローカル制御コマンドです。
+
+```text
+:status
+:project SageTalk
+:model
+:model gpt-5.5
+:models
+:interrupt
+:replace この方向でやり直して
+```
+
+`:model` は引数なしで現在の project の model 状態を表示します。`:model <name>` は現在の project の model を切り替えます。
+
+WeChat から開始した task は attach terminal に同期表示され、attach terminal から開始した task は WeChat に同期表示されます。両方とも同じ project session、mode、model、実行中 turn を共有します。
+
 ## プラットフォーム対応
 
 現在は Codex-first ですが、core は agent-ready な方向で分割されています。
@@ -194,7 +225,10 @@ MCP server は同じ core services を再利用します。業務ロジックを
 ├── integrations/
 ├── src/
 │   ├── backend/
+│   ├── commands/
+│   ├── config/
 │   ├── core/
+│   ├── ipc/
 │   ├── mcp/
 │   ├── runtime/
 │   ├── setup/

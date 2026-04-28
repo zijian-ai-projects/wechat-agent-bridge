@@ -33,10 +33,14 @@ codex login --device-auth
 ```text
 /project
 /project SageTalk
+/model
+/model gpt-5.5
+/models
 @SageTalk run tests and summarize failures
 ```
 
 `@프로젝트명` 없이 보낸 일반 메시지는 현재 프로젝트로 갑니다.
+`/model`은 현재 프로젝트에 실제 적용되는 모델과 출처를 보여줍니다. `/model <name>`은 해당 프로젝트의 모델을 바꾸고, `/models`는 로컬 Codex 모델 catalog를 읽습니다.
 
 전체 명령 설명은 [docs/commands.md](docs/commands.md)를 보세요.
 
@@ -138,6 +142,33 @@ Tools:
 
 자세한 내용은 [docs/mcp.md](docs/mcp.md)를 참고하십시오.
 
+## 데스크톱 동기화 터미널
+
+daemon이 실행 중이면 같은 bridge runtime에 로컬 터미널로 연결할 수 있습니다.
+
+```bash
+wechat-agent-bridge attach
+wechat-agent-bridge attach SageTalk
+```
+
+프로젝트 이름을 붙여 시작하면 먼저 해당 프로젝트로 전환합니다. 연결 후에도 `:project <name>`으로 프로젝트를 바꿀 수 있습니다.
+
+일반 입력은 현재 프로젝트의 prompt로 실행됩니다. `:`로 시작하는 줄은 로컬 제어 명령입니다.
+
+```text
+:status
+:project SageTalk
+:model
+:model gpt-5.5
+:models
+:interrupt
+:replace 이 방향으로 다시 진행
+```
+
+`:model`은 인자 없이 현재 프로젝트의 모델 상태를 보여줍니다. `:model <name>`은 현재 프로젝트의 모델을 전환합니다.
+
+WeChat에서 시작한 작업은 attach 터미널에 동기화되어 표시되고, attach 터미널에서 시작한 작업은 WeChat에 동기화되어 표시됩니다. 양쪽은 같은 프로젝트 session, mode, model, 실행 중인 turn을 공유합니다.
+
 ## 플랫폼 지원
 
 현재는 Codex-first이지만, core는 이미 agent-ready 방향으로 분리되어 있습니다.
@@ -194,7 +225,10 @@ MCP server는 같은 core services를 재사용합니다. 비즈니스 로직을
 ├── integrations/
 ├── src/
 │   ├── backend/
+│   ├── commands/
+│   ├── config/
 │   ├── core/
+│   ├── ipc/
 │   ├── mcp/
 │   ├── runtime/
 │   ├── setup/
