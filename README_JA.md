@@ -28,6 +28,79 @@ npm run start
 codex login --device-auth
 ```
 
+## インストールとデプロイ
+
+### 前提条件
+
+- Node.js 20 以上
+- npm
+- ローカルに `codex` CLI がインストールされ、bridge daemon を実行する同じ OS ユーザーで `codex login` が完了していること
+- 绑定に使う個人 WeChat アカウント
+- ローカル project を 1 階層目の子ディレクトリとして置く `projectsRoot` ディレクトリ
+
+### ソースからインストール
+
+```bash
+git clone https://github.com/zijian-ai-projects/wechat-agent-bridge.git
+cd wechat-agent-bridge
+npm install
+npm run build
+```
+
+初回利用前にローカル設定と WeChat 绑定を初期化します。
+
+```bash
+npm run setup
+```
+
+`setup` は設定、アカウント、session data を `~/.wechat-agent-bridge` に書き込みます。これらのファイルにはローカル状態とアカウント情報が含まれるため、Git に commit したり他のユーザーと共有したりしないでください。
+
+### フォアグラウンドで実行
+
+```bash
+npm run start
+```
+
+debug や一時利用に向いています。terminal を閉じると bridge も停止します。
+
+### バックグラウンド daemon としてデプロイ
+
+```bash
+npm run daemon -- start
+npm run daemon -- status
+npm run daemon -- logs
+npm run daemon -- restart
+npm run daemon -- stop
+```
+
+v1 は systemd unit、launchd plist、Windows service を自動ではインストールしません。これはユーザー単位の daemon であり、`codex login` を完了した同じ OS ユーザーで実行してください。外部 process manager や login script から起動する場合は、絶対パスを推奨します。
+
+```bash
+npm --prefix /ABSOLUTE/PATH/TO/wechat-agent-bridge run daemon -- start
+```
+
+既存デプロイの更新：
+
+```bash
+git pull
+npm install
+npm run build
+npm run daemon -- restart
+```
+
+source checkout から desktop mirroring terminal を使う場合、package を global link していなければ build 済み entrypoint を直接実行できます。
+
+```bash
+node dist/src/main.js attach
+node dist/src/main.js attach SageTalk
+```
+
+`wechat-agent-bridge attach` を直接使いたい場合は、repo 内で一度実行します。
+
+```bash
+npm link
+```
+
 ## Everyday WeChat Usage
 
 ```text

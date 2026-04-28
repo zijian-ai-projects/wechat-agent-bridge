@@ -28,6 +28,79 @@ If browser callback is inconvenient, run this first:
 codex login --device-auth
 ```
 
+## Installation and Deployment
+
+### Prerequisites
+
+- Node.js 20 or newer
+- npm
+- The `codex` CLI installed locally, with `codex login` completed by the same OS user that will run the bridge daemon
+- A personal WeChat account to bind
+- A `projectsRoot` directory with local projects as first-level child directories
+
+### Install from Source
+
+```bash
+git clone https://github.com/zijian-ai-projects/wechat-agent-bridge.git
+cd wechat-agent-bridge
+npm install
+npm run build
+```
+
+Initialize local config and WeChat binding before first use:
+
+```bash
+npm run setup
+```
+
+`setup` writes config, account, and session data under `~/.wechat-agent-bridge`. These files contain local state and account data. Do not commit them to Git or share them with other users.
+
+### Run in the Foreground
+
+```bash
+npm run start
+```
+
+This is best for debugging or temporary use. The bridge stops when the terminal exits.
+
+### Deploy as a Background Daemon
+
+```bash
+npm run daemon -- start
+npm run daemon -- status
+npm run daemon -- logs
+npm run daemon -- restart
+npm run daemon -- stop
+```
+
+v1 does not install a systemd unit, launchd plist, or Windows service automatically. It is a user-level daemon and should run as the same OS user that completed `codex login`. If you start it from an external process manager or login script, prefer an absolute path:
+
+```bash
+npm --prefix /ABSOLUTE/PATH/TO/wechat-agent-bridge run daemon -- start
+```
+
+Update an existing deployment:
+
+```bash
+git pull
+npm install
+npm run build
+npm run daemon -- restart
+```
+
+When running from a source checkout, use the built entrypoint for the desktop mirroring terminal if the package has not been linked globally:
+
+```bash
+node dist/src/main.js attach
+node dist/src/main.js attach SageTalk
+```
+
+To use `wechat-agent-bridge attach` directly, run once from the repo:
+
+```bash
+npm link
+```
+
 ## Everyday WeChat Usage
 
 ```text

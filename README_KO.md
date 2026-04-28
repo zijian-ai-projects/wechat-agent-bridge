@@ -28,6 +28,79 @@ npm run start
 codex login --device-auth
 ```
 
+## 설치와 배포
+
+### 전제 조건
+
+- Node.js 20 이상
+- npm
+- 로컬에 `codex` CLI가 설치되어 있고, bridge daemon을 실행할 같은 OS 사용자로 `codex login`이 완료되어 있어야 합니다
+- 바인딩할 개인 WeChat 계정
+- 로컬 프로젝트를 1단계 하위 디렉터리로 둘 `projectsRoot` 디렉터리
+
+### 소스에서 설치
+
+```bash
+git clone https://github.com/zijian-ai-projects/wechat-agent-bridge.git
+cd wechat-agent-bridge
+npm install
+npm run build
+```
+
+처음 사용하기 전에 로컬 설정과 WeChat 바인딩을 초기화합니다:
+
+```bash
+npm run setup
+```
+
+`setup`은 설정, 계정, session 데이터를 `~/.wechat-agent-bridge` 아래에 씁니다. 이 파일들은 로컬 상태와 계정 정보를 포함하므로 Git에 commit하거나 다른 사용자와 공유하지 마십시오.
+
+### 포그라운드 실행
+
+```bash
+npm run start
+```
+
+debug나 임시 사용에 적합합니다. 터미널이 종료되면 bridge도 멈춥니다.
+
+### 백그라운드 daemon으로 배포
+
+```bash
+npm run daemon -- start
+npm run daemon -- status
+npm run daemon -- logs
+npm run daemon -- restart
+npm run daemon -- stop
+```
+
+v1은 systemd unit, launchd plist, Windows service를 자동으로 설치하지 않습니다. 사용자 단위 daemon이며, `codex login`을 완료한 같은 OS 사용자로 실행해야 합니다. 외부 process manager나 login script에서 시작한다면 절대 경로를 권장합니다.
+
+```bash
+npm --prefix /ABSOLUTE/PATH/TO/wechat-agent-bridge run daemon -- start
+```
+
+기존 배포 업데이트:
+
+```bash
+git pull
+npm install
+npm run build
+npm run daemon -- restart
+```
+
+source checkout에서 desktop mirroring terminal을 사용할 때 package를 global link하지 않았다면 build된 entrypoint를 직접 실행할 수 있습니다.
+
+```bash
+node dist/src/main.js attach
+node dist/src/main.js attach SageTalk
+```
+
+`wechat-agent-bridge attach`를 바로 사용하려면 repo 안에서 한 번 실행합니다.
+
+```bash
+npm link
+```
+
 ## Everyday WeChat Usage
 
 ```text

@@ -32,6 +32,79 @@ npm run start
 codex login --device-auth
 ```
 
+## 安装与部署
+
+### 前置条件
+
+- Node.js 20 或更高版本
+- npm
+- 本机已安装 `codex` CLI，并且用运行 bridge daemon 的同一个 OS 用户完成 `codex login`
+- 一个用于绑定的个人微信账号
+- 一个 `projectsRoot` 目录，本地项目作为一级子目录放在里面
+
+### 从源码安装
+
+```bash
+git clone https://github.com/zijian-ai-projects/wechat-agent-bridge.git
+cd wechat-agent-bridge
+npm install
+npm run build
+```
+
+首次运行先初始化本地配置和微信绑定：
+
+```bash
+npm run setup
+```
+
+`setup` 会把配置、账号和会话数据写到 `~/.wechat-agent-bridge`。这些文件包含本机状态和账号信息，不要提交到 Git，也不要共享给其他用户。
+
+### 本地前台运行
+
+```bash
+npm run start
+```
+
+适合调试或临时使用；终端关闭后 bridge 也会停止。
+
+### 后台 daemon 部署
+
+```bash
+npm run daemon -- start
+npm run daemon -- status
+npm run daemon -- logs
+npm run daemon -- restart
+npm run daemon -- stop
+```
+
+v1 不会自动安装 systemd、launchd 或 Windows service。它是用户级 daemon，应以完成 `codex login` 的同一个 OS 用户运行。若从外部进程管理器或登录脚本启动，建议使用绝对路径：
+
+```bash
+npm --prefix /ABSOLUTE/PATH/TO/wechat-agent-bridge run daemon -- start
+```
+
+更新部署：
+
+```bash
+git pull
+npm install
+npm run build
+npm run daemon -- restart
+```
+
+从源码运行桌面同步终端时，如果没有全局 link，可以直接使用构建后的入口：
+
+```bash
+node dist/src/main.js attach
+node dist/src/main.js attach SageTalk
+```
+
+如果希望直接使用 `wechat-agent-bridge attach`，可以在仓库目录执行一次：
+
+```bash
+npm link
+```
+
 ## 微信里怎么用
 
 ```text

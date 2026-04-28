@@ -28,6 +28,79 @@ Si el callback del navegador no es cómodo, ejecuta primero:
 codex login --device-auth
 ```
 
+## Instalación y Despliegue
+
+### Requisitos Previos
+
+- Node.js 20 o superior
+- npm
+- El CLI `codex` instalado localmente, con `codex login` completado por el mismo usuario del sistema operativo que ejecutará el daemon del bridge
+- Una cuenta personal de WeChat para vincular
+- Un directorio `projectsRoot` con los proyectos locales como subdirectorios de primer nivel
+
+### Instalar desde el Código Fuente
+
+```bash
+git clone https://github.com/zijian-ai-projects/wechat-agent-bridge.git
+cd wechat-agent-bridge
+npm install
+npm run build
+```
+
+Antes del primer uso, inicializa la configuración local y la vinculación de WeChat:
+
+```bash
+npm run setup
+```
+
+`setup` escribe configuración, cuenta y datos de session en `~/.wechat-agent-bridge`. Estos archivos contienen estado local y datos de cuenta. No los subas a Git ni los compartas con otros usuarios.
+
+### Ejecutar en Primer Plano
+
+```bash
+npm run start
+```
+
+Es útil para debug o uso temporal. El bridge se detiene cuando se cierra la terminal.
+
+### Desplegar como Daemon en Segundo Plano
+
+```bash
+npm run daemon -- start
+npm run daemon -- status
+npm run daemon -- logs
+npm run daemon -- restart
+npm run daemon -- stop
+```
+
+v1 no instala automáticamente una unidad systemd, un plist de launchd ni un Windows service. Es un daemon de usuario y debe ejecutarse como el mismo usuario del sistema operativo que completó `codex login`. Si lo arrancas desde un process manager externo o un script de login, usa una ruta absoluta:
+
+```bash
+npm --prefix /ABSOLUTE/PATH/TO/wechat-agent-bridge run daemon -- start
+```
+
+Actualizar un despliegue existente:
+
+```bash
+git pull
+npm install
+npm run build
+npm run daemon -- restart
+```
+
+Si ejecutas desde un checkout del código fuente y el paquete no está enlazado globalmente, usa el entrypoint construido para la terminal de sincronización de escritorio:
+
+```bash
+node dist/src/main.js attach
+node dist/src/main.js attach SageTalk
+```
+
+Para usar `wechat-agent-bridge attach` directamente, ejecuta una vez desde el repo:
+
+```bash
+npm link
+```
+
 ## Uso Diario en WeChat
 
 ```text
