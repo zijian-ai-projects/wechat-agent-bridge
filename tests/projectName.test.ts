@@ -57,18 +57,22 @@ test("documentation covers attach cli and model catalog commands", () => {
   const readme = readFileSync("README.md", "utf8");
   assert.match(readme, /## 桌面同步终端/);
   assert.match(readme, /wechat-agent-bridge attach SageTalk/);
+  assert.match(readme, /带项目名启动时会先切换到该项目/);
+  assert.match(readme, /:model` 不带参数时显示当前项目模型状态/);
   assert.match(readme, /:models/);
 
   const commands = readFileSync("docs/commands.md", "utf8");
   assert.match(commands, /## \/models/);
   assert.match(commands, /codex debug models/);
-  assert.match(commands, /模型来源可能是项目 override、Codex config 或 Codex CLI default/);
+  assert.match(commands, /模型来源可能是 `project override`、`codex config` 或 `unresolved`/);
 
   const integrations = readFileSync("docs/integrations.md", "utf8");
   assert.match(integrations, /wechat-agent-bridge attach <project>/);
   assert.match(integrations, /not the official Codex TUI/);
 
   const skill = readFileSync("integrations/codex/plugin/skills/wechat-agent-bridge/SKILL.md", "utf8");
+  assert.match(skill, /## Available MCP Tools/);
+  assert.match(skill, /## Local CLI And Chat Commands/);
   assert.match(skill, /wechat-agent-bridge attach \[project\]/);
   assert.match(skill, /\/models` and `:models/);
 });

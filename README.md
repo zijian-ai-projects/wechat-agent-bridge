@@ -157,6 +157,8 @@ wechat-agent-bridge attach
 wechat-agent-bridge attach SageTalk
 ```
 
+带项目名启动时会先切换到该项目；连接后也可以用 `:project <name>` 切换。
+
 普通输入会作为当前项目 prompt 执行。以 `:` 开头的是本地控制命令：
 
 ```text
@@ -168,6 +170,8 @@ wechat-agent-bridge attach SageTalk
 :interrupt
 :replace 重新按这个方向做
 ```
+
+`:model` 不带参数时显示当前项目模型状态；`:model <name>` 会切换当前项目模型。
 
 微信发起的任务会同步显示在 attach 终端；attach 发起的任务会同步显示到微信。两端共享同一个项目 session、mode、model 和运行中 turn。
 

@@ -17,6 +17,9 @@ Use this skill when the user asks about their local WeChat bridge state, wants t
 - `agent_interrupt`: interrupt the active local agent turn.
 - `agent_set_mode`: set `readonly`, `workspace`, or `yolo`.
 - `agent_set_cwd`: set the agent cwd to an allowlisted Git repo root.
+
+## Local CLI And Chat Commands
+
 - `wechat-agent-bridge attach [project]`: open the local desktop companion terminal for mirrored bridge turns.
 - `/models` and `:models`: list sanitized Codex model catalog entries when available.
 

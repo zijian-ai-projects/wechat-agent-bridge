@@ -2,7 +2,7 @@ import { lstat, mkdir, rm } from "node:fs/promises";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 
-import type { BridgeEvent, BridgeEventBus } from "../core/EventBus.js";
+import { nowIso, type BridgeEvent, type BridgeEventBus } from "../core/EventBus.js";
 import type { ModelService } from "../core/ModelService.js";
 import type { ProjectRuntimeManager } from "../core/ProjectRuntimeManager.js";
 import { logger } from "../logging/logger.js";
@@ -19,11 +19,18 @@ export interface AttachServerOptions {
   eventBus: BridgeEventBus;
   projectManager: Pick<
     ProjectRuntimeManager,
-    "activeProjectAlias" | "listProjects" | "runPrompt" | "interrupt" | "replacePrompt" | "setModel" | "setActiveProject"
+    | "activeProjectAlias"
+    | "listProjects"
+    | "runPrompt"
+    | "interrupt"
+    | "replacePrompt"
+    | "setModel"
+    | "setActiveProject"
+    | "session"
   >;
   boundUserId: string;
   sendWechatText: (text: string) => Promise<void>;
-  modelService: Pick<ModelService, "listModels">;
+  modelService: Pick<ModelService, "listModels" | "describeSession">;
 }
 
 interface SocketIdentity {
@@ -127,6 +134,7 @@ export class AttachServer {
   private async handleMessage(socket: Socket, message: AttachClientMessage): Promise<void> {
     switch (message.type) {
       case "hello":
+        await this.switchActiveProject(socket, message.project);
         this.send(socket, await this.readyEvent());
         return;
       case "prompt":
@@ -194,13 +202,7 @@ export class AttachServer {
         this.send(socket, await this.readyEvent());
         return;
       case "project":
-        if (message.value) {
-          try {
-            await this.options.projectManager.setActiveProject(message.value);
-          } catch (error) {
-            this.send(socket, { type: "error", message: errorMessage(error) });
-          }
-        }
+        await this.switchActiveProject(socket, message.value);
         this.send(socket, await this.readyEvent());
         return;
       case "interrupt":
@@ -219,6 +221,10 @@ export class AttachServer {
         );
         return;
       case "model":
+        if (message.value === undefined) {
+          await this.sendModelState(socket, message.project);
+          return;
+        }
         await this.options.projectManager.setModel(message.project, message.value);
         return;
       case "models":
@@ -233,6 +239,28 @@ export class AttachServer {
       activeProject: this.options.projectManager.activeProjectAlias,
       projects: await this.options.projectManager.listProjects(),
     };
+  }
+
+  private async switchActiveProject(socket: Socket, alias?: string): Promise<void> {
+    if (!alias) return;
+    try {
+      await this.options.projectManager.setActiveProject(alias);
+    } catch (error) {
+      this.send(socket, { type: "error", message: errorMessage(error) });
+    }
+  }
+
+  private async sendModelState(socket: Socket, alias?: string): Promise<void> {
+    const session = await this.options.projectManager.session(alias);
+    const model = await this.options.modelService.describeSession(session);
+    this.send(socket, {
+      type: "state",
+      project: session.projectAlias,
+      state: session.state,
+      model: model.effectiveModel,
+      modelSource: model.source,
+      timestamp: nowIso(),
+    });
   }
 
   private broadcast(event: BridgeEvent): void {

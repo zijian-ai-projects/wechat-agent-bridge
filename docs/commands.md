@@ -79,7 +79,7 @@
 - 是否会切换当前项目：不会
 - 是否会中断当前任务：不会
 - 示例：`/model`、`/model gpt-5.4`、`/model SageTalk gpt-5.4`
-- 注意事项：不带参数时显示当前项目的有效模型和模型来源；模型来源可能是项目 override、Codex config 或 Codex CLI default。
+- 注意事项：不带参数时显示当前项目的有效模型和模型来源；模型来源可能是 `project override`、`codex config` 或 `unresolved`。
 
 ## /models
 

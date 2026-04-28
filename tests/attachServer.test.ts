@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 
 import type { AgentMode } from "../src/backend/AgentBackend.js";
 import { EventBus } from "../src/core/EventBus.js";
-import { AttachServer } from "../src/ipc/AttachServer.js";
+import { AttachServer, type AttachServerOptions } from "../src/ipc/AttachServer.js";
 import { JsonLineBuffer, serializeAttachMessage, type AttachServerEvent } from "../src/ipc/protocol.js";
 import type { ProjectSession } from "../src/session/types.js";
 
@@ -136,6 +136,17 @@ function makeSocketPath(): string {
   return join(mkdtempSync(join(tmpdir(), "wcb-attach-")), "bridge.sock");
 }
 
+function makeModelServiceStub(): AttachServerOptions["modelService"] {
+  return {
+    listModels: async () => ({ models: [] }),
+    describeSession: async (session) => ({
+      configuredModel: session.model,
+      effectiveModel: session.model ?? "Codex CLI default",
+      source: session.model ? "project override" : "unresolved",
+    }),
+  };
+}
+
 function connectClient(socketPath: string): Promise<{ socket: Socket; buffer: JsonLineBuffer<AttachServerEvent> }> {
   const socket = connect(socketPath);
   const buffer = new JsonLineBuffer<AttachServerEvent>();
@@ -236,6 +247,11 @@ async function withServer(
       listModels: async () => ({
         models: [{ slug: "gpt-5.5", displayName: "GPT-5.5" }],
       }),
+      describeSession: async (session) => ({
+        configuredModel: session.model,
+        effectiveModel: session.model ?? "Codex CLI default",
+        source: session.model ? "project override" : "unresolved",
+      }),
     },
   });
   await server.start();
@@ -265,6 +281,21 @@ test("AttachServer sends ready on hello and dispatches prompts", async () => {
     assert.equal(manager.prompts[0]?.source, "attach");
     assert.match(wechatMessages[0] ?? "", /桌面输入/);
     assert.match(wechatMessages[0] ?? "", /hi/);
+  });
+});
+
+test("AttachServer applies requested hello project before reporting ready", async () => {
+  await withServer(async ({ socketPath, manager }) => {
+    const { socket, buffer } = await connectClient(socketPath);
+
+    socket.write(serializeAttachMessage({ type: "hello", client: "attach-cli", project: "SageTalk" }));
+    const ready = await readNext(socket, buffer);
+    socket.end();
+
+    assert.equal(ready.type, "ready");
+    assert.equal(ready.activeProject, "SageTalk");
+    assert.equal(manager.activeProjectAlias, "SageTalk");
+    assert.equal(ready.projects.find((project) => project.alias === "SageTalk")?.active, true);
   });
 });
 
@@ -324,6 +355,23 @@ test("AttachServer broadcasts bridge events and handles commands", async () => {
     assert.deepEqual(manager.models, [{ alias: "bridge", model: "gpt-5.5" }]);
     assert.equal(models.type, "models");
     assert.equal(models.models[0]?.slug, "gpt-5.5");
+  });
+});
+
+test("AttachServer reports model state for model commands without a value", async () => {
+  await withServer(async ({ socketPath, manager }) => {
+    await manager.setModel("bridge", "gpt-5.5");
+    const { socket, buffer } = await connectClient(socketPath);
+
+    socket.write(serializeAttachMessage({ type: "command", project: "bridge", name: "model" }));
+    const event = await readNext(socket, buffer);
+    socket.end();
+
+    assert.equal(event.type, "state");
+    assert.equal(event.project, "bridge");
+    assert.equal(event.model, "gpt-5.5");
+    assert.equal(event.modelSource, "project override");
+    assert.equal(manager.models.length, 1);
   });
 });
 
@@ -489,7 +537,7 @@ test("AttachServer refuses to unlink a live socket owned by another server", asy
     projectManager: new FakeProjectManager(),
     boundUserId: "user-1",
     sendWechatText: async () => undefined,
-    modelService: { listModels: async () => ({ models: [] }) },
+    modelService: makeModelServiceStub(),
   });
   let started = false;
 
@@ -517,7 +565,7 @@ test("AttachServer stop before start is safe and does not remove unrelated socke
     projectManager: new FakeProjectManager(),
     boundUserId: "user-1",
     sendWechatText: async () => undefined,
-    modelService: { listModels: async () => ({ models: [] }) },
+    modelService: makeModelServiceStub(),
   });
 
   await attachServer.stop();
