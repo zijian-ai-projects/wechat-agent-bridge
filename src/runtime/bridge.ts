@@ -4,6 +4,7 @@ import { CodexExecBackend } from "../backend/CodexExecBackend.js";
 import type { AgentBackend } from "../backend/AgentBackend.js";
 import { loadLatestAccount, type AccountData } from "../config/accounts.js";
 import { loadConfig, type BridgeConfig } from "../config/config.js";
+import { getAttachSocketPath } from "../config/paths.js";
 import { ProjectCatalog, resolveProjectsRootConfig, type ProjectDefinition } from "../config/projects.js";
 import { loadRuntimeState, saveRuntimeState, type BridgeRuntimeState } from "../config/runtimeState.js";
 import { logger } from "../logging/logger.js";
@@ -20,6 +21,7 @@ import { EventBus } from "../core/EventBus.js";
 import { ModelService } from "../core/ModelService.js";
 import { ProjectRuntimeManager } from "../core/ProjectRuntimeManager.js";
 import type { SessionStorePort } from "../core/types.js";
+import { AttachServer } from "../ipc/AttachServer.js";
 
 export async function runBridge(backend: AgentBackend = new CodexExecBackend()): Promise<void> {
   const config = loadConfig();
@@ -31,7 +33,16 @@ export async function runBridge(backend: AgentBackend = new CodexExecBackend()):
   }
   const api = new WeChatApi(account.botToken, account.baseUrl);
   const sender = createWechatSender(api, account.accountId);
-  const { bridgeService, projectManager } = await buildProjectBridgeRuntime({ account, config, sender, backend });
+  const { bridgeService, projectManager, eventBus, modelService } = await buildProjectBridgeRuntime({ account, config, sender, backend });
+  const attachServer = new AttachServer({
+    socketPath: getAttachSocketPath(),
+    eventBus,
+    projectManager,
+    boundUserId: account.boundUserId,
+    sendWechatText: async (text) => sender.sendText(account.boundUserId, "", text),
+    modelService,
+  });
+  await attachServer.start();
   const monitor = new WeChatMonitor(api, {
     onMessage: (message) => bridgeService.handleMessage(message),
     onSessionExpired: () => {
@@ -40,7 +51,10 @@ export async function runBridge(backend: AgentBackend = new CodexExecBackend()):
     },
   });
 
-  const shutdown = async () => shutdownProjectBridgeRuntime(monitor, projectManager);
+  const shutdown = async () => {
+    await attachServer.stop();
+    await shutdownProjectBridgeRuntime(monitor, projectManager);
+  };
   process.once("SIGINT", () => void shutdown());
   process.once("SIGTERM", () => void shutdown());
 
