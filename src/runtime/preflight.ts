@@ -2,7 +2,7 @@ import { checkCodexInstalled } from "./codexAvailability.js";
 import { assertCodexLoggedIn, checkCodexFileAuthPermissions, checkCodexLoginStatus, type CodexLoginStatus } from "../config/codexAuth.js";
 import type { BridgeConfig } from "../config/config.js";
 import type { CodexCheckResult } from "./codexAvailability.js";
-import { resolveProjectRegistry } from "../config/projects.js";
+import { ProjectCatalog, resolveProjectRegistry, resolveProjectsRootConfig } from "../config/projects.js";
 import { realpath } from "node:fs/promises";
 
 export interface PreflightResult {
@@ -35,9 +35,18 @@ export async function runPreflightWithChecks(
 
   const login = assertCodexLoggedIn(checks.checkCodexLoginStatus());
   checks.checkCodexFileAuthPermissions();
-  const registry = await resolveProjectRegistry(config);
-  const cwd = registry.defaultProject.cwd;
+  const cwd = await resolvePreflightCwd(config);
   await Promise.all((config.extraWritableRoots ?? []).map((root) => realpath(root)));
 
   return { codexVersion: codex.version, codexCommand: codex.command, login, cwd };
+}
+
+async function resolvePreflightCwd(config: BridgeConfig): Promise<string> {
+  if (config.projectsRoot) {
+    const projectsRoot = await resolveProjectsRootConfig(config);
+    const project = await new ProjectCatalog(projectsRoot.projectsRoot).resolveInitialProject(projectsRoot.defaultProject);
+    return project.cwd;
+  }
+  const registry = await resolveProjectRegistry(config);
+  return registry.defaultProject.cwd;
 }

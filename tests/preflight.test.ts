@@ -1,5 +1,5 @@
 import { mkdtempSync, mkdirSync } from "node:fs";
-import { rm, writeFile } from "node:fs/promises";
+import { realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -38,6 +38,32 @@ test("preflight allows daemon start when codex login status is ChatGPT", async (
 
   assert.equal(result.login.state, "chatgpt");
   await rm(repo, { recursive: true, force: true });
+});
+
+test("preflight accepts projectsRoot setup config without legacy projects map", async () => {
+  const root = mkdtempSync(join(tmpdir(), "wcb-preflight-root-"));
+  mkdirSync(join(root, "SageTalk"));
+
+  const result = await runPreflightWithChecks(
+    {
+      projectsRoot: root,
+      defaultProject: "SageTalk",
+      defaultCwd: root,
+      allowlistRoots: [root],
+      extraWritableRoots: [],
+      streamIntervalMs: 1,
+    },
+    {
+      checkCodexInstalled: () => ({ ok: true, version: "codex 1.0.0", command: "codex.cmd" }),
+      checkCodexLoginStatus: () => ({ state: "chatgpt", message: "Logged in using ChatGPT" }),
+      checkCodexFileAuthPermissions: () => undefined,
+    },
+  );
+
+  assert.equal(result.login.state, "chatgpt");
+  assert.equal(result.codexCommand, "codex.cmd");
+  assert.equal(result.cwd, await realpath(join(root, "SageTalk")));
+  await rm(root, { recursive: true, force: true });
 });
 
 test("preflight returns clear login guidance when codex is not logged in", async () => {
