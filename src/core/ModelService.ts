@@ -1,15 +1,14 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import type { BridgeModelSource } from "./EventBus.js";
 import type { ProjectSession } from "../session/types.js";
 
-const execFileAsync = promisify(execFile);
 const CODEX_CLI_DEFAULT = "Codex CLI default";
 const DEFAULT_MODEL_CATALOG_TIMEOUT_MS = 5000;
+const MODEL_CATALOG_MAX_BUFFER = 8 * 1024 * 1024;
 
 export interface ModelState {
   configuredModel?: string;
@@ -61,14 +60,10 @@ export class ModelService {
 
   async listModels(): Promise<ModelCatalog> {
     try {
-      const { stdout } = await execFileAsync(this.codexBin, ["debug", "models"], {
-        encoding: "utf8",
-        maxBuffer: 8 * 1024 * 1024,
-        timeout: this.modelCatalogTimeoutMs,
-      });
+      const stdout = await runCodexDebugModels(this.codexBin, this.modelCatalogTimeoutMs);
       return parseCodexModelCatalog(stdout);
-    } catch {
-      throw new Error("Unable to read Codex model catalog.");
+    } catch (error) {
+      throw new Error(`Unable to read Codex model catalog: ${safeCatalogError(error)}`);
     }
   }
 
@@ -99,6 +94,70 @@ export function parseCodexModelCatalog(stdout: string): ModelCatalog {
     .map((item): ModelCatalogEntry | undefined => sanitizeModelEntry(item))
     .filter((item): item is ModelCatalogEntry => Boolean(item));
   return { models };
+}
+
+async function runCodexDebugModels(codexBin: string, timeoutMs: number): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn(codexBin, ["debug", "models"], { stdio: ["ignore", "pipe", "pipe"] });
+    const stdoutChunks: Buffer[] = [];
+    let stdoutBytes = 0;
+    let settled = false;
+    let timedOut = false;
+    let tooLarge = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    timer.unref();
+
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback();
+    };
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdoutBytes += chunk.byteLength;
+      if (stdoutBytes > MODEL_CATALOG_MAX_BUFFER) {
+        tooLarge = true;
+        child.kill("SIGKILL");
+        return;
+      }
+      stdoutChunks.push(chunk);
+    });
+
+    child.stderr?.resume();
+
+    child.once("error", (error) => {
+      finish(() => reject(new Error((error as NodeJS.ErrnoException).code === "ENOENT" ? "Codex CLI not found" : "Codex CLI failed to start")));
+    });
+
+    child.once("close", (code, signal) => {
+      finish(() => {
+        if (timedOut) {
+          reject(new Error(`timed out after ${timeoutMs}ms`));
+          return;
+        }
+        if (tooLarge) {
+          reject(new Error("catalog output exceeded limit"));
+          return;
+        }
+        if (code !== 0) {
+          reject(new Error(code === null ? `terminated by signal ${signal ?? "unknown"}` : `exited with code ${code}`));
+          return;
+        }
+        resolve(Buffer.concat(stdoutChunks).toString("utf8"));
+      });
+    });
+  });
+}
+
+function safeCatalogError(error: unknown): string {
+  if (error instanceof SyntaxError) return "malformed catalog";
+  if (error instanceof Error) return error.message;
+  return "unknown failure";
 }
 
 function sanitizeModelEntry(item: unknown): ModelCatalogEntry | undefined {

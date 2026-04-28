@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -118,40 +118,66 @@ console.log(JSON.stringify({ models: [{ slug: "gpt-5.5", display_name: "GPT-5.5"
 
 test("ModelService listModels throws sanitized errors for command failures", async () => {
   const dir = mkdtempSync(join(tmpdir(), "wcb-model-bin-"));
-  const bin = join(dir, "fake-codex.mjs");
+  const bin = join(dir, "fake-codex.sh");
   writeFileSync(
     bin,
-    `#!/usr/bin/env node
-console.error("SECRET_STDERR");
-process.exit(2);
+    `#!/bin/sh
+echo "SECRET_STDERR" >&2
+exit 2
 `,
     { mode: 0o700 },
   );
-  const service = new ModelService({ codexBin: bin, modelCatalogTimeoutMs: 100 });
+  const service = new ModelService({ codexBin: bin, modelCatalogTimeoutMs: 1000 });
 
   await assert.rejects(() => service.listModels(), (error: unknown) => {
     assert.ok(error instanceof Error);
     assert.match(error.message, /Unable to read Codex model catalog/);
+    assert.match(error.message, /exited with code 2/);
     assert.doesNotMatch(error.message, /SECRET_STDERR/);
     return true;
   });
 });
 
-test("ModelService listModels times out hung catalog commands", async () => {
+test("ModelService listModels times out hung catalog commands and cleans up the child", async () => {
   const dir = mkdtempSync(join(tmpdir(), "wcb-model-bin-"));
-  const bin = join(dir, "fake-codex.mjs");
+  const bin = join(dir, "fake-codex.sh");
+  const pidPath = join(dir, "pid.txt");
   writeFileSync(
     bin,
-    `#!/usr/bin/env node
-setInterval(() => {}, 1000);
+    `#!/bin/sh
+echo $$ > ${JSON.stringify(pidPath)}
+while true; do sleep 1; done
 `,
     { mode: 0o700 },
   );
-  const service = new ModelService({ codexBin: bin, modelCatalogTimeoutMs: 20 });
+  const service = new ModelService({ codexBin: bin, modelCatalogTimeoutMs: 1000 });
 
-  await assert.rejects(() => service.listModels(), /Unable to read Codex model catalog/);
+  await assert.rejects(() => service.listModels(), /timed out after 1000ms/);
+  const pid = Number.parseInt(readFileText(pidPath), 10);
+  assert.equal(Number.isFinite(pid), true);
+  await waitForProcessExit(pid);
 });
 
 function readFileText(path: string): string {
   return readFileSync(path, "utf8");
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (existsSync(`/proc/${pid}`)) {
+    assert.fail(`process ${pid} is still running`);
+  }
+  try {
+    process.kill(pid, 0);
+    assert.fail(`process ${pid} is still running`);
+  } catch {
+    return;
+  }
 }
