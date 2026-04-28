@@ -23,7 +23,7 @@ async function main(): Promise<void> {
     await runBridge();
     return;
   }
-  console.log("Usage: npm run setup | npm run start | npm run mcp | npm run daemon -- start|stop|status|logs|restart | wechat-agent-bridge attach [project]");
+  console.log("Usage: npm run setup | npm run start | npm run attach | npm run mcp | npm run daemon -- start|stop|status|logs|restart | wechat-agent-bridge attach [project]");
 }
 
 main().catch((error) => {

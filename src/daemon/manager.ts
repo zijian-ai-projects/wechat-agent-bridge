@@ -43,7 +43,7 @@ async function startDaemon(): Promise<void> {
     cwd: process.cwd(),
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: process.env,
+    env: { ...process.env, WECHAT_AGENT_BRIDGE_AUTO_ATTACH: "0" },
   });
   child.unref();
   closeSync(logFd);

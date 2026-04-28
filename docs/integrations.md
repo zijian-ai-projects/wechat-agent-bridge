@@ -35,11 +35,13 @@ The local CLI does not currently expose `codex plugin create`, `codex plugin ins
 Desktop mirroring is exposed by the project binary:
 
 ```bash
+npm run attach
+npm run attach -- <project>
 wechat-agent-bridge attach
 wechat-agent-bridge attach <project>
 ```
 
-This is a companion terminal frontend, not the official Codex TUI attaching to a bridge-managed process.
+`npm run start` opens this companion terminal automatically for foreground runs. Background daemon starts do not open a popup. This is a companion terminal frontend, not the official Codex TUI attaching to a bridge-managed process.
 
 ## Claude
 

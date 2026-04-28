@@ -20,6 +20,8 @@ Use this skill when the user asks about their local WeChat bridge state, wants t
 
 ## Local CLI And Chat Commands
 
+- `npm run start`: starts the foreground bridge and auto-opens one desktop attach terminal.
+- `npm run attach`: opens the local desktop companion terminal from a source checkout.
 - `wechat-agent-bridge attach [project]`: open the local desktop companion terminal for mirrored bridge turns.
 - `/models` and `:models`: list sanitized Codex model catalog entries when available.
 

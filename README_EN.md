@@ -70,7 +70,11 @@ npm run setup
 npm run start
 ```
 
-This is best for debugging or temporary use. The bridge stops when the terminal exits.
+This is best for debugging or temporary use. The bridge stops when the terminal exits. After startup succeeds, it opens a desktop mirroring terminal that runs `npm run attach`. If your OS blocks the popup or no new window appears, run it manually:
+
+```bash
+npm run attach
+```
 
 ### Deploy as a Background Daemon
 
@@ -97,11 +101,11 @@ npm run build
 npm run daemon -- restart
 ```
 
-When running from a source checkout, use the built entrypoint for the desktop mirroring terminal if the package has not been linked globally:
+When running from a source checkout, prefer the npm script for the desktop mirroring terminal:
 
 ```bash
-node dist/src/main.js attach
-node dist/src/main.js attach SageTalk
+npm run attach
+npm run attach -- SageTalk
 ```
 
 To use `wechat-agent-bridge attach` directly, run once from the repo:
@@ -226,9 +230,11 @@ See [docs/mcp.md](docs/mcp.md).
 
 ## Desktop Mirroring Terminal
 
-After the daemon is running, you can attach a local terminal to the same bridge runtime:
+`npm run start` opens one desktop mirroring terminal automatically after the foreground daemon starts. The background daemon does not open popups; attach manually when needed:
 
 ```bash
+npm run attach
+npm run attach -- SageTalk
 wechat-agent-bridge attach
 wechat-agent-bridge attach SageTalk
 ```

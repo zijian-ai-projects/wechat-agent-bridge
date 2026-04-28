@@ -22,6 +22,7 @@ import { ModelService } from "../core/ModelService.js";
 import { ProjectRuntimeManager } from "../core/ProjectRuntimeManager.js";
 import type { SessionStorePort } from "../core/types.js";
 import { AttachServer } from "../ipc/AttachServer.js";
+import { launchAttachTerminal } from "../ipc/attachTerminal.js";
 
 export async function runBridge(backend?: AgentBackend): Promise<void> {
   const config = loadConfig();
@@ -67,6 +68,17 @@ export async function runBridge(backend?: AgentBackend): Promise<void> {
 
   logger.info("Daemon started", { accountId: account.accountId, boundUserId: account.boundUserId });
   console.log(`wechat-agent-bridge started. Bound user: ${account.boundUserId}`);
+  const attachLaunch = launchAttachTerminal({
+    cwd: process.cwd(),
+    onError: (error) => {
+      logger.warn("Failed to open desktop sync terminal", { error: error.message });
+    },
+  });
+  if (attachLaunch.launched) {
+    console.log("Desktop sync terminal opened. If it did not appear, run: npm run attach");
+  } else if (attachLaunch.reason !== "disabled") {
+    console.log(`Desktop sync terminal not opened (${attachLaunch.reason}). Run manually: npm run attach`);
+  }
   try {
     await monitor.run();
   } finally {

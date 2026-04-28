@@ -20,6 +20,7 @@ test("package metadata uses the generic agent bridge name", () => {
     [PROJECT_NAME]: "./dist/src/main.js",
     [`${PROJECT_NAME}-mcp`]: "./dist/src/mcp-main.js",
   });
+  assert.equal((packageJson.scripts as Record<string, string>).attach, "tsx src/main.ts attach");
 });
 
 test("config paths use the new app name while accepting the legacy home env var", () => {

@@ -70,7 +70,11 @@ npm run setup
 npm run start
 ```
 
-Es útil para debug o uso temporal. El bridge se detiene cuando se cierra la terminal.
+Es útil para debug o uso temporal. El bridge se detiene cuando se cierra la terminal. Cuando el arranque termina correctamente, abre automáticamente una terminal de sincronización que ejecuta `npm run attach`. Si el sistema bloquea el popup o no aparece una ventana nueva, ejecútala manualmente:
+
+```bash
+npm run attach
+```
 
 ### Desplegar como Daemon en Segundo Plano
 
@@ -97,11 +101,11 @@ npm run build
 npm run daemon -- restart
 ```
 
-Si ejecutas desde un checkout del código fuente y el paquete no está enlazado globalmente, usa el entrypoint construido para la terminal de sincronización de escritorio:
+Si ejecutas desde un checkout del código fuente, usa preferentemente el script npm para la terminal de sincronización de escritorio:
 
 ```bash
-node dist/src/main.js attach
-node dist/src/main.js attach SageTalk
+npm run attach
+npm run attach -- SageTalk
 ```
 
 Para usar `wechat-agent-bridge attach` directamente, ejecuta una vez desde el repo:
@@ -226,9 +230,11 @@ Consulta [docs/mcp.md](docs/mcp.md).
 
 ## Terminal de Sincronización de Escritorio
 
-Después de iniciar el daemon, puedes conectar una terminal local al mismo bridge runtime:
+`npm run start` abre automáticamente una terminal de sincronización cuando el daemon en primer plano arranca correctamente. El daemon en segundo plano no abre popups; conéctate manualmente cuando lo necesites:
 
 ```bash
+npm run attach
+npm run attach -- SageTalk
 wechat-agent-bridge attach
 wechat-agent-bridge attach SageTalk
 ```

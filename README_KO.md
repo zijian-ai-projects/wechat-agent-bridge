@@ -70,7 +70,11 @@ npm run setup
 npm run start
 ```
 
-debug나 임시 사용에 적합합니다. 터미널이 종료되면 bridge도 멈춥니다.
+debug나 임시 사용에 적합합니다. 터미널이 종료되면 bridge도 멈춥니다. 시작에 성공하면 `npm run attach`를 실행하는 desktop mirroring terminal이 자동으로 열립니다. OS가 팝업을 막거나 새 창이 나타나지 않으면 수동으로 실행하세요.
+
+```bash
+npm run attach
+```
 
 ### 백그라운드 daemon으로 배포
 
@@ -97,11 +101,11 @@ npm run build
 npm run daemon -- restart
 ```
 
-source checkout에서 desktop mirroring terminal을 사용할 때 package를 global link하지 않았다면 build된 entrypoint를 직접 실행할 수 있습니다.
+source checkout에서 desktop mirroring terminal을 사용할 때는 npm script를 권장합니다.
 
 ```bash
-node dist/src/main.js attach
-node dist/src/main.js attach SageTalk
+npm run attach
+npm run attach -- SageTalk
 ```
 
 `wechat-agent-bridge attach`를 바로 사용하려면 repo 안에서 한 번 실행합니다.
@@ -226,9 +230,11 @@ Tools:
 
 ## 데스크톱 동기화 터미널
 
-daemon이 실행 중이면 같은 bridge runtime에 로컬 터미널로 연결할 수 있습니다.
+`npm run start`는 foreground daemon 시작 후 desktop mirroring terminal을 자동으로 엽니다. background daemon은 팝업을 열지 않으므로 필요할 때 수동으로 attach하세요.
 
 ```bash
+npm run attach
+npm run attach -- SageTalk
 wechat-agent-bridge attach
 wechat-agent-bridge attach SageTalk
 ```

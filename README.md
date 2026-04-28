@@ -74,7 +74,11 @@ npm run setup
 npm run start
 ```
 
-适合调试或临时使用；终端关闭后 bridge 也会停止。
+适合调试或临时使用；终端关闭后 bridge 也会停止。启动成功后会自动打开一个桌面同步终端，运行的是 `npm run attach`。如果系统拦截弹窗或没有出现新窗口，可以手动运行：
+
+```bash
+npm run attach
+```
 
 ### 后台 daemon 部署
 
@@ -101,11 +105,11 @@ npm run build
 npm run daemon -- restart
 ```
 
-从源码运行桌面同步终端时，如果没有全局 link，可以直接使用构建后的入口：
+从源码运行桌面同步终端时，推荐直接使用 npm 脚本：
 
 ```bash
-node dist/src/main.js attach
-node dist/src/main.js attach SageTalk
+npm run attach
+npm run attach -- SageTalk
 ```
 
 如果希望直接使用 `wechat-agent-bridge attach`，可以在仓库目录执行一次：
@@ -236,9 +240,11 @@ codex mcp add wechat-agent-bridge -- npm --prefix /ABSOLUTE/PATH/TO/wechat-agent
 
 ## 桌面同步终端
 
-启动 daemon 后，可以在电脑终端连接同一个 bridge runtime：
+`npm run start` 前台启动成功后会自动打开一个桌面同步终端。后台 daemon 不会自动弹窗；需要时可以手动连接同一个 bridge runtime：
 
 ```bash
+npm run attach
+npm run attach -- SageTalk
 wechat-agent-bridge attach
 wechat-agent-bridge attach SageTalk
 ```
