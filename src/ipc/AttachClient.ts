@@ -22,44 +22,68 @@ export async function runAttach(options: RunAttachOptions = {}): Promise<void> {
   const buffer = new JsonLineBuffer<AttachServerEvent>();
   const readline = createInterface({ input, terminal: false });
   let activeProject = options.project;
-  let connected = false;
+  let inputClosed = false;
+  let ready = false;
+  const pendingInput: string[] = [];
 
-  return await new Promise<void>((resolve) => {
+  return await new Promise<void>((resolve, reject) => {
     const finish = once(() => {
       closeReadline(readline);
       resolve();
     });
+    const fail = once((error: Error) => {
+      closeReadline(readline);
+      reject(error);
+    });
 
     socket.once("connect", () => {
-      connected = true;
       socket.write(serializeAttachMessage({ type: "hello", client: "attach-cli", ...(options.project ? { project: options.project } : {}) }));
     });
     socket.on("data", (chunk: Buffer) => {
       try {
-        for (const event of buffer.push(chunk.toString("utf8"))) {
-          if (event.type === "ready") activeProject = event.activeProject;
-          output.write(`${renderAttachEvent(event)}\n`);
-        }
+        processServerEvents(buffer.push(chunk.toString("utf8")));
       } catch (error) {
         output.write(`error: ${errorMessage(error)}\n`);
+        try {
+          processServerEvents(buffer.push(""));
+        } catch (drainError) {
+          output.write(`error: ${errorMessage(drainError)}\n`);
+        }
       }
     });
     socket.once("error", (error) => {
-      output.write(`Unable to connect to wechat-agent-bridge daemon: ${error.message}\n`);
+      const message = `Unable to connect to wechat-agent-bridge daemon: ${error.message}`;
+      output.write(`${message}\n`);
       output.write("Start it with: npm run start or npm run daemon -- start\n");
+      fail(new Error(message));
     });
     socket.once("close", finish);
 
     readline.on("line", (line) => {
-      const message = parseAttachInput(line, activeProject);
-      if (!message || socket.destroyed) return;
-      socket.write(serializeAttachMessage(message));
+      if (!ready) {
+        pendingInput.push(line);
+        return;
+      }
+      writeInputLine(socket, line, activeProject);
     });
     readline.once("close", () => {
-      if (socket.destroyed) return;
-      if (connected) socket.end();
-      else socket.destroy();
+      inputClosed = true;
+      endIfInputComplete(socket, ready, pendingInput);
     });
+
+    function processServerEvents(events: AttachServerEvent[]): void {
+      for (const event of events) {
+        if (event.type === "ready") {
+          activeProject = event.activeProject;
+          ready = true;
+        }
+        output.write(`${renderAttachEvent(event)}\n`);
+      }
+      if (ready) {
+        flushPendingInput(socket, pendingInput, activeProject);
+        endIfInputComplete(socket, inputClosed, pendingInput);
+      }
+    }
   });
 }
 
@@ -107,13 +131,31 @@ function closeReadline(readline: Interface): void {
   }
 }
 
-function once(callback: () => void): () => void {
+function once<T extends unknown[]>(callback: (...args: T) => void): (...args: T) => void {
   let called = false;
-  return () => {
+  return (...args: T) => {
     if (called) return;
     called = true;
-    callback();
+    callback(...args);
   };
+}
+
+function flushPendingInput(socket: Socket, pendingInput: string[], activeProject?: string): void {
+  while (pendingInput.length > 0) {
+    const line = pendingInput.shift();
+    if (line !== undefined) writeInputLine(socket, line, activeProject);
+  }
+}
+
+function writeInputLine(socket: Socket, line: string, activeProject?: string): void {
+  const message = parseAttachInput(line, activeProject);
+  if (!message || socket.destroyed) return;
+  socket.write(serializeAttachMessage(message));
+}
+
+function endIfInputComplete(socket: Socket, inputClosed: boolean, pendingInput: string[]): void {
+  if (!inputClosed || pendingInput.length > 0 || socket.destroyed) return;
+  socket.end();
 }
 
 function errorMessage(error: unknown): string {

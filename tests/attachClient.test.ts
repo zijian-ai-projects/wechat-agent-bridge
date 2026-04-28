@@ -88,11 +88,77 @@ test("runAttach connects, prints ready state, and forwards terminal input", asyn
   }
 });
 
-test("runAttach reports a clear error when the daemon socket is unavailable", async () => {
+test("runAttach buffers terminal input until ready establishes the active project", async () => {
+  const socketPath = makeSocketPath();
+  const received: AttachClientMessage[] = [];
+  let clientSocket: Socket | undefined;
+  const server = createServer((socket) => {
+    clientSocket = socket;
+    const buffer = new JsonLineBuffer<AttachClientMessage>({ parse: parseAttachClientMessage });
+    socket.on("data", (chunk: Buffer) => {
+      received.push(...buffer.push(chunk.toString("utf8")));
+    });
+  });
+  const stdin = new PassThrough();
+  const stdout = captureOutput();
+  await listen(server, socketPath);
+
+  try {
+    const run = runAttach({ socketPath, stdin, stdout: stdout.stream });
+    stdin.write("queued prompt\n");
+    stdin.end();
+    await waitFor(() => received.some((message) => message.type === "hello"));
+    assert.equal(received.length, 1);
+
+    clientSocket?.write(
+      serializeAttachEvent({
+        type: "ready",
+        activeProject: "SageTalk",
+        projects: [{ alias: "SageTalk", cwd: "/tmp/sage", ready: true, active: true }],
+      }),
+    );
+    await waitFor(() => received.length === 2);
+    clientSocket?.end();
+    await run;
+
+    assert.deepEqual(received[1], { type: "prompt", project: "SageTalk", text: "queued prompt" });
+  } finally {
+    stdin.destroy();
+    await closeServer(server);
+    await rm(socketPath.split("/bridge.sock")[0], { recursive: true, force: true });
+  }
+});
+
+test("runAttach drains valid server events preserved after a bad JSONL line", async () => {
+  const socketPath = makeSocketPath();
+  let clientSocket: Socket | undefined;
+  const server = createServer((socket) => {
+    clientSocket = socket;
+    socket.on("data", () => undefined);
+  });
+  const stdout = captureOutput();
+  await listen(server, socketPath);
+
+  try {
+    const run = runAttach({ socketPath, stdin: new PassThrough(), stdout: stdout.stream });
+    await waitFor(() => Boolean(clientSocket));
+    clientSocket?.write(`{bad}\n${serializeAttachEvent({ type: "codex_event", project: "bridge", text: "still delivered", timestamp: "2026-04-27T00:00:00.000Z" })}`);
+    await waitFor(() => stdout.text().includes("still delivered"));
+    clientSocket?.end();
+    await run;
+
+    assert.match(stdout.text(), /error: Invalid JSONL message/);
+  } finally {
+    await closeServer(server);
+    await rm(socketPath.split("/bridge.sock")[0], { recursive: true, force: true });
+  }
+});
+
+test("runAttach rejects after reporting a clear error when the daemon socket is unavailable", async () => {
   const socketPath = makeSocketPath();
   const stdout = captureOutput();
 
-  await runAttach({ socketPath, stdin: new PassThrough(), stdout: stdout.stream });
+  await assert.rejects(runAttach({ socketPath, stdin: new PassThrough(), stdout: stdout.stream }), /Unable to connect/);
 
   assert.match(stdout.text(), /Unable to connect to wechat-agent-bridge daemon/);
   await rm(socketPath.split("/bridge.sock")[0], { recursive: true, force: true });
