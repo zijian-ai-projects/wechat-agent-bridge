@@ -4,6 +4,8 @@ import type { DiscoveredProject, ProjectDefinition } from "../config/projects.js
 import type { ProjectSessionStore } from "../session/projectSessionStore.js";
 import type { ProjectSession } from "../session/types.js";
 import type { AgentService } from "./AgentService.js";
+import { NullEventBus, nowIso, type BridgeEventBus, type BridgePromptSource } from "./EventBus.js";
+import { ModelService } from "./ModelService.js";
 import { BusyProjectError, ProjectRuntime } from "./ProjectRuntime.js";
 import type { TextSender } from "./types.js";
 
@@ -25,6 +27,8 @@ export interface ProjectRuntimeManagerOptions {
   initialProjectAlias: string;
   defaultProjectAlias: string;
   rememberActiveProject?: (alias: string) => Promise<void> | void;
+  eventBus?: BridgeEventBus;
+  modelService?: Pick<ModelService, "describeSession">;
 }
 
 export interface ManagerRunPromptOptions {
@@ -32,6 +36,7 @@ export interface ManagerRunPromptOptions {
   prompt: string;
   toUserId: string;
   contextToken: string;
+  source?: BridgePromptSource;
 }
 
 export interface ProjectListEntry extends DiscoveredProject {
@@ -57,6 +62,8 @@ export class ProjectRuntimeManager {
   private readonly extraWritableRoots: string[];
   private readonly defaultProjectAlias: string;
   private readonly rememberActiveProject?: (alias: string) => Promise<void> | void;
+  private readonly eventBus: BridgeEventBus;
+  private readonly modelService: Pick<ModelService, "describeSession">;
   private readonly runtimes = new Map<string, ProjectRuntime>();
   private activeAlias: string;
 
@@ -71,6 +78,8 @@ export class ProjectRuntimeManager {
     this.activeAlias = options.initialProjectAlias;
     this.defaultProjectAlias = options.defaultProjectAlias;
     this.rememberActiveProject = options.rememberActiveProject;
+    this.eventBus = options.eventBus ?? new NullEventBus();
+    this.modelService = options.modelService ?? new ModelService();
   }
 
   get activeProjectAlias(): string {
@@ -103,6 +112,8 @@ export class ProjectRuntimeManager {
         agentService: this.agentService,
         streamIntervalMs: this.streamIntervalMs,
         extraWritableRoots: this.extraWritableRoots,
+        eventBus: this.eventBus,
+        modelService: this.modelService,
       });
       this.runtimes.set(project.alias, runtime);
     }
@@ -113,11 +124,19 @@ export class ProjectRuntimeManager {
     const alias = await this.resolveAlias(options.projectAlias);
     const runtime = await this.runtime(alias);
     try {
+      await this.eventBus.publish({
+        type: "user_message",
+        source: options.source ?? "wechat",
+        project: alias,
+        text: options.prompt,
+        timestamp: nowIso(),
+      });
       await runtime.runPrompt({
         prompt: options.prompt,
         toUserId: options.toUserId,
         contextToken: options.contextToken,
         isActive: () => alias === this.activeAlias,
+        source: options.source,
       });
     } catch (error) {
       if (!(error instanceof BusyProjectError)) throw error;

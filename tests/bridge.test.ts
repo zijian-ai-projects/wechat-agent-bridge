@@ -183,7 +183,7 @@ test("buildProjectBridgeRuntime wires catalog-backed routing into BridgeService"
   } as unknown as BridgeConfig;
 
   try {
-    const { bridgeService, projectManager } = await buildProjectBridgeRuntime({
+    const { bridgeService, projectManager, eventBus, modelService } = await buildProjectBridgeRuntime({
       account,
       config,
       sender,
@@ -194,6 +194,8 @@ test("buildProjectBridgeRuntime wires catalog-backed routing into BridgeService"
     await bridgeService.handleMessage(textMessage("user-1", "@SageTalk run tests"));
 
     assert.equal(projectManager.activeProjectAlias, "bridge");
+    assert.equal(typeof eventBus.publish, "function");
+    assert.equal(typeof modelService.describeSession, "function");
     assert.equal(backend.startRequests.length, 1);
     assert.equal(backend.startRequests[0]?.cwd, sageDir);
     assert.equal(backend.startRequests[0]?.prompt, "run tests");
@@ -202,6 +204,28 @@ test("buildProjectBridgeRuntime wires catalog-backed routing into BridgeService"
     await rm(root, { recursive: true, force: true });
     await rm(sessionsDir, { recursive: true, force: true });
   }
+});
+
+test("BridgeService marks WeChat prompts with a wechat source", async () => {
+  const sender = new FakeSender();
+  const prompts: Array<{ prompt: string; source?: string }> = [];
+  const projectManager = {
+    activeProjectAlias: "bridge",
+    listProjects: async () => [{ alias: "bridge", cwd: "/tmp/bridge", ready: true, active: true }],
+    runPrompt: async (options: { prompt: string; source?: string }) => {
+      prompts.push(options);
+    },
+  };
+  const service = new (await import("../src/core/BridgeService.js")).BridgeService({
+    account,
+    projectManager: projectManager as never,
+    sender,
+  });
+
+  await service.handleMessage(textMessage("user-1", "run tests"));
+
+  assert.equal(prompts[0]?.prompt, "run tests");
+  assert.equal(prompts[0]?.source, "wechat");
 });
 
 test("buildProjectBridgeRuntime restores lastProject when it still exists", async () => {

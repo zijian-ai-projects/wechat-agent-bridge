@@ -129,7 +129,7 @@ class MemorySender {
 
 class FakeProjectManager {
   activeProjectAlias = "bridge";
-  prompts: Array<{ projectAlias?: string; prompt: string; toUserId: string; contextToken: string }> = [];
+  prompts: Array<{ projectAlias?: string; prompt: string; toUserId: string; contextToken: string; source?: string }> = [];
   replacements: Array<{ projectAlias?: string; prompt: string; toUserId: string; contextToken: string }> = [];
   clears: Array<string | undefined> = [];
 
@@ -151,7 +151,7 @@ class FakeProjectManager {
     return this.setActiveProject(alias);
   }
 
-  async runPrompt(options: { projectAlias?: string; prompt: string; toUserId: string; contextToken: string }): Promise<void> {
+  async runPrompt(options: { projectAlias?: string; prompt: string; toUserId: string; contextToken: string; source?: string }): Promise<void> {
     this.prompts.push(options);
   }
 
@@ -246,7 +246,9 @@ test("BridgeService routes @Project prompts without changing active project", as
   await bridge.handleMessage(textMessage("user-1", "@SageTalk run tests"));
 
   assert.equal(projectManager.activeProjectAlias, "bridge");
-  assert.deepEqual(projectManager.prompts, [{ projectAlias: "SageTalk", prompt: "run tests", toUserId: "user-1", contextToken: "ctx" }]);
+  assert.deepEqual(projectManager.prompts, [
+    { projectAlias: "SageTalk", prompt: "run tests", toUserId: "user-1", contextToken: "ctx", source: "wechat" },
+  ]);
 });
 
 test("BridgeService replies clearly for unknown @Project prompts", async () => {
@@ -265,7 +267,27 @@ test("BridgeService routes ordinary prompts to the active project with full text
 
   await bridge.handleMessage(textMessage("user-1", "  keep literal spacing"));
 
-  assert.deepEqual(projectManager.prompts, [{ prompt: "  keep literal spacing", toUserId: "user-1", contextToken: "ctx" }]);
+  assert.deepEqual(projectManager.prompts, [
+    { prompt: "  keep literal spacing", toUserId: "user-1", contextToken: "ctx", source: "wechat" },
+  ]);
+});
+
+test("BridgeService passes shared model service into commands", async () => {
+  const projectManager = new FakeProjectManager();
+  const sender = new MemorySender();
+  const bridge = new BridgeService({
+    account,
+    projectManager,
+    sender,
+    modelService: {
+      describeSession: async () => ({ effectiveModel: "shared-model", source: "codex config" }),
+      listModels: async () => ({ models: [] }),
+    },
+  });
+
+  await bridge.handleMessage(textMessage("user-1", "/status"));
+
+  assert.match(sender.messages.join("\n"), /模型: shared-model/);
 });
 
 test("BridgeService passes WeChat routing context into replace commands", async () => {

@@ -1,5 +1,5 @@
 import { routeCommand } from "../commands/router.js";
-import { formatProjectInitReply, type CommandProjectManager } from "../commands/handlers.js";
+import { formatProjectInitReply, type CommandModelService, type CommandProjectManager } from "../commands/handlers.js";
 import type { AccountData } from "../config/accounts.js";
 import { isDirectBoundUserMessage } from "../config/security.js";
 import { MessageItemType, type WeixinMessage } from "../wechat/types.js";
@@ -12,17 +12,20 @@ export interface BridgeServiceOptions {
   account: AccountData;
   projectManager: BridgeProjectManager;
   sender: TextSender;
+  modelService?: CommandModelService;
 }
 
 export class BridgeService {
   private readonly account: AccountData;
   private readonly projectManager: BridgeProjectManager;
   private readonly sender: TextSender;
+  private readonly modelService?: CommandModelService;
 
   constructor(options: BridgeServiceOptions) {
     this.account = options.account;
     this.projectManager = options.projectManager;
     this.sender = options.sender;
+    this.modelService = options.modelService;
   }
 
   async handleMessage(message: WeixinMessage): Promise<void> {
@@ -51,6 +54,7 @@ export class BridgeService {
         boundUserId: this.account.boundUserId,
         toUserId: fromUserId,
         contextToken,
+        modelService: this.modelService,
       });
       if (result.handled && result.reply) {
         await this.sender.sendText(fromUserId, contextToken, result.reply);
@@ -83,6 +87,7 @@ export class BridgeService {
         prompt: targeted?.prompt ?? rawText,
         toUserId: fromUserId,
         contextToken,
+        source: "wechat",
       });
     } catch (error) {
       if (error instanceof ProjectInitRequiredError) {

@@ -7,6 +7,8 @@ import { StreamBuffer } from "../runtime/streamBuffer.js";
 import type { ProjectSessionStore } from "../session/projectSessionStore.js";
 import type { ProjectSession } from "../session/types.js";
 import type { AgentService } from "./AgentService.js";
+import { NullEventBus, nowIso, type BridgeEventBus, type BridgePromptSource } from "./EventBus.js";
+import { ModelService } from "./ModelService.js";
 import type { TextSender } from "./types.js";
 
 export class BusyProjectError extends Error {
@@ -24,6 +26,8 @@ export interface ProjectRuntimeOptions {
   agentService: AgentService;
   streamIntervalMs: number;
   extraWritableRoots?: string[];
+  eventBus?: BridgeEventBus;
+  modelService?: Pick<ModelService, "describeSession">;
 }
 
 export interface ProjectRunPromptOptions {
@@ -31,6 +35,7 @@ export interface ProjectRunPromptOptions {
   toUserId: string;
   contextToken: string;
   isActive: () => boolean;
+  source?: BridgePromptSource;
 }
 
 const LIFECYCLE_EVENT_TYPES = new Set(["turn.started", "turn.completed", "turn.failed"]);
@@ -45,6 +50,8 @@ export class ProjectRuntime {
   private readonly agentService: AgentService;
   private readonly streamIntervalMs: number;
   private readonly extraWritableRoots: string[];
+  private readonly eventBus: BridgeEventBus;
+  private readonly modelService: Pick<ModelService, "describeSession">;
   private sessionPromise?: Promise<ProjectSession>;
   private interruptPromise?: Promise<void>;
 
@@ -56,6 +63,8 @@ export class ProjectRuntime {
     this.agentService = options.agentService;
     this.streamIntervalMs = options.streamIntervalMs;
     this.extraWritableRoots = options.extraWritableRoots ?? [];
+    this.eventBus = options.eventBus ?? new NullEventBus();
+    this.modelService = options.modelService ?? new ModelService();
     this.executionKey = `${options.userId}:${options.project.alias}`;
   }
 
@@ -84,6 +93,17 @@ export class ProjectRuntime {
     });
 
     try {
+      const modelState = await this.modelService.describeSession(session);
+      await this.eventBus.publish({
+        type: "turn_started",
+        source: options.source ?? "wechat",
+        project: this.project.alias,
+        model: modelState.effectiveModel,
+        modelSource: modelState.source,
+        mode: session.mode,
+        timestamp: nowIso(),
+      });
+
       const result = await this.agentService.runTurn(
         {
           userId: this.userId,
@@ -104,6 +124,12 @@ export class ProjectRuntime {
               session.codexThreadId = id;
             }
             if (!formatted) return;
+            await this.eventBus.publish({
+              type: "codex_event",
+              project: this.project.alias,
+              text: formatted,
+              timestamp: nowIso(),
+            });
             if (options.isActive()) {
               await stream.append(formatted);
               return;
@@ -126,6 +152,12 @@ export class ProjectRuntime {
       if (result.interrupted) return;
       if (result.text) {
         this.sessionStore.addHistory(session, "assistant", result.text);
+        await this.eventBus.publish({
+          type: "turn_completed",
+          project: this.project.alias,
+          text: result.text,
+          timestamp: nowIso(),
+        });
         if (!options.isActive()) await this.sendWithDynamicPrefix(options, prefix, `最终结果:\n${result.text}`);
         return;
       }
@@ -135,11 +167,21 @@ export class ProjectRuntime {
       const message = error instanceof Error ? error.message : String(error);
       logger.error("Project Codex turn failed", { projectAlias: this.project.alias, error: message });
       await this.sendWithDynamicPrefix(options, prefix, `Codex 处理失败: ${message}`);
+      await this.eventBus.publish({ type: "turn_failed", project: this.project.alias, message, timestamp: nowIso() });
     } finally {
       if (session.activeTurnId === turnId) {
         session.state = "idle";
         session.activeTurnId = undefined;
         await this.sessionStore.save(session);
+        const finalModelState = await this.modelService.describeSession(session);
+        await this.eventBus.publish({
+          type: "state",
+          project: this.project.alias,
+          state: session.state,
+          model: finalModelState.effectiveModel,
+          modelSource: finalModelState.source,
+          timestamp: nowIso(),
+        });
       }
     }
   }

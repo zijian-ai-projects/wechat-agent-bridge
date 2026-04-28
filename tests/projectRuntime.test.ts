@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 
 import type { AgentBackend, AgentTurnRequest, AgentTurnResult } from "../src/backend/AgentBackend.js";
 import { AgentService } from "../src/core/AgentService.js";
+import type { BridgeEvent, BridgeEventBus } from "../src/core/EventBus.js";
+import type { ModelState } from "../src/core/ModelService.js";
 import { ProjectInitRequiredError, ProjectRuntimeManager } from "../src/core/ProjectRuntimeManager.js";
 import type { TextSender } from "../src/core/types.js";
 import type { AccountData } from "../src/config/accounts.js";
@@ -207,6 +209,8 @@ function makeManager(
     initialProjectAlias?: string;
     defaultProjectAlias?: string;
     rememberActiveProject?: (alias: string) => Promise<void> | void;
+    eventBus?: BridgeEventBus;
+    modelService?: { describeSession(session: ProjectSession): Promise<ModelState> };
   } = {},
 ): {
   manager: ProjectRuntimeManager;
@@ -230,6 +234,8 @@ function makeManager(
     initialProjectAlias: options.initialProjectAlias ?? "bridge",
     defaultProjectAlias: options.defaultProjectAlias ?? "bridge",
     rememberActiveProject: options.rememberActiveProject,
+    eventBus: options.eventBus,
+    modelService: options.modelService,
   });
   return { manager, backend, store, sender, catalog };
 }
@@ -324,6 +330,43 @@ test("runtime execution rejects non-git projects until they are initialized", as
   assert.equal(backend.startRequests.length, 0);
 });
 
+test("ProjectRuntimeManager publishes user and turn events", async () => {
+  const events: BridgeEvent[] = [];
+  const { manager, backend } = makeManager({
+    eventBus: {
+      publish: async (event) => {
+        events.push(event);
+      },
+      subscribe: () => () => undefined,
+    },
+    modelService: {
+      describeSession: async () => ({ effectiveModel: "gpt-5.5", source: "project override" }),
+    },
+  });
+  backend.enqueue({ text: "done", events: [{ event: { type: "turn.started" }, formatted: "Codex 开始处理" }] });
+
+  await manager.runPrompt({ projectAlias: "bridge", prompt: "hi", toUserId: "user-1", contextToken: "ctx", source: "wechat" });
+
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["user_message", "turn_started", "codex_event", "turn_completed", "state"],
+  );
+  const [userMessage, turnStarted, codexEvent, turnCompleted, state] = events;
+  assert.equal(userMessage?.type, "user_message");
+  assert.equal(userMessage?.source, "wechat");
+  assert.equal(userMessage?.project, "bridge");
+  assert.equal(userMessage?.text, "hi");
+  assert.equal(turnStarted?.type, "turn_started");
+  assert.equal(turnStarted?.model, "gpt-5.5");
+  assert.equal(turnStarted?.modelSource, "project override");
+  assert.equal(codexEvent?.type, "codex_event");
+  assert.equal(codexEvent?.text, "Codex 开始处理");
+  assert.equal(turnCompleted?.type, "turn_completed");
+  assert.equal(turnCompleted?.text, "done");
+  assert.equal(state?.type, "state");
+  assert.equal(state?.state, "idle");
+});
+
 test("different projects run concurrently with separate execution keys", async () => {
   const { manager, backend } = makeManager();
   backend.enqueue({ text: "bridge done", waitForRelease: "bridge" });
@@ -348,7 +391,7 @@ test("same busy project rejects a second prompt without starting another backend
   backend.enqueue({ text: "done", waitForRelease: "bridge" });
 
   const first = manager.runPrompt({ projectAlias: "bridge", prompt: "first", toUserId: "user-1", contextToken: "ctx" });
-  await Promise.resolve();
+  await waitFor(() => backend.startRequests.length === 1);
   await manager.runPrompt({ projectAlias: "bridge", prompt: "second", toUserId: "user-1", contextToken: "ctx" });
 
   assert.equal(backend.startRequests.length, 1);
@@ -364,7 +407,7 @@ test("replacePrompt interrupts target execution key then starts replacement prom
   backend.enqueue({ text: "replacement" });
 
   const first = manager.runPrompt({ projectAlias: "bridge", prompt: "first", toUserId: "user-1", contextToken: "ctx" });
-  await Promise.resolve();
+  await waitFor(() => backend.startRequests.length === 1);
   await manager.replacePrompt({ projectAlias: "bridge", prompt: "replacement", toUserId: "user-1", contextToken: "ctx" });
 
   assert.deepEqual(backend.interrupts, ["user-1:bridge"]);

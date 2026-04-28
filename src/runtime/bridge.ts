@@ -16,6 +16,8 @@ import type { WeixinMessage } from "../wechat/types.js";
 import { runPreflight } from "./preflight.js";
 import { AgentService } from "../core/AgentService.js";
 import { BridgeService } from "../core/BridgeService.js";
+import { EventBus } from "../core/EventBus.js";
+import { ModelService } from "../core/ModelService.js";
 import { ProjectRuntimeManager } from "../core/ProjectRuntimeManager.js";
 import type { SessionStorePort } from "../core/types.js";
 
@@ -60,6 +62,8 @@ export interface BuildProjectBridgeRuntimeOptions {
 export async function buildProjectBridgeRuntime(options: BuildProjectBridgeRuntimeOptions): Promise<{
   bridgeService: BridgeService;
   projectManager: ProjectRuntimeManager;
+  eventBus: EventBus;
+  modelService: ModelService;
 }> {
   const resolvedConfig = await resolveProjectsRootConfig(options.config);
   const catalog = new ProjectCatalog(resolvedConfig.projectsRoot);
@@ -71,6 +75,8 @@ export async function buildProjectBridgeRuntime(options: BuildProjectBridgeRunti
   const extraWritableRoots = await Promise.all((options.config.extraWritableRoots ?? []).map((root) => realpath(root)));
   const projectSessionStore = options.sessionStore ?? new ProjectSessionStore();
   const agentService = new AgentService(options.backend);
+  const eventBus = new EventBus();
+  const modelService = new ModelService();
   const projectManager = new ProjectRuntimeManager({
     account: options.account,
     catalog,
@@ -82,13 +88,16 @@ export async function buildProjectBridgeRuntime(options: BuildProjectBridgeRunti
     initialProjectAlias: initialProject.alias,
     defaultProjectAlias: resolvedConfig.defaultProject,
     rememberActiveProject: async (alias) => (options.saveRuntimeState ?? saveRuntimeState)({ lastProject: alias }),
+    eventBus,
+    modelService,
   });
   const bridgeService = new BridgeService({
     account: options.account,
     projectManager,
     sender: options.sender,
+    modelService,
   });
-  return { bridgeService, projectManager };
+  return { bridgeService, projectManager, eventBus, modelService };
 }
 
 async function handleMessageForTestCompat(
