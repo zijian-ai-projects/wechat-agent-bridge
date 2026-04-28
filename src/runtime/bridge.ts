@@ -60,7 +60,11 @@ export async function runBridge(backend: AgentBackend = new CodexExecBackend()):
 
   logger.info("Daemon started", { accountId: account.accountId, boundUserId: account.boundUserId });
   console.log(`wechat-agent-bridge started. Bound user: ${account.boundUserId}`);
-  await monitor.run();
+  try {
+    await monitor.run();
+  } finally {
+    await attachServer.stop();
+  }
 }
 
 export interface BuildProjectBridgeRuntimeOptions {

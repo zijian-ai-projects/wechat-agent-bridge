@@ -1,10 +1,11 @@
-import { mkdir, rm } from "node:fs/promises";
-import { createServer, type Server, type Socket } from "node:net";
+import { lstat, mkdir, rm } from "node:fs/promises";
+import { connect, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 
 import type { BridgeEvent, BridgeEventBus } from "../core/EventBus.js";
 import type { ModelService } from "../core/ModelService.js";
 import type { ProjectRuntimeManager } from "../core/ProjectRuntimeManager.js";
+import { logger } from "../logging/logger.js";
 import {
   JsonLineBuffer,
   parseAttachClientMessage,
@@ -25,9 +26,16 @@ export interface AttachServerOptions {
   modelService: Pick<ModelService, "listModels">;
 }
 
+interface SocketIdentity {
+  dev: number;
+  ino: number;
+}
+
 export class AttachServer {
   private readonly clients = new Set<Socket>();
   private readonly server: Server;
+  private socketIdentity?: SocketIdentity;
+  private started = false;
   private unsubscribe?: () => void;
 
   constructor(private readonly options: AttachServerOptions) {
@@ -35,40 +43,40 @@ export class AttachServer {
   }
 
   async start(): Promise<void> {
+    if (this.started) return;
     await mkdir(dirname(this.options.socketPath), { recursive: true, mode: 0o700 });
-    await rm(this.options.socketPath, { force: true });
+    await removeStaleSocket(this.options.socketPath);
     this.unsubscribe = this.options.eventBus.subscribe((event) => this.broadcast(event));
-    await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error) => {
-        this.server.off("listening", onListening);
-        reject(error);
-      };
-      const onListening = () => {
-        this.server.off("error", onError);
-        resolve();
-      };
-      this.server.once("error", onError);
-      this.server.once("listening", onListening);
-      this.server.listen(this.options.socketPath);
-    });
+    try {
+      await listen(this.server, this.options.socketPath);
+      this.started = true;
+      this.socketIdentity = await readSocketIdentity(this.options.socketPath);
+    } catch (error) {
+      this.started = false;
+      this.socketIdentity = undefined;
+      this.unsubscribe?.();
+      this.unsubscribe = undefined;
+      await closeServer(this.server);
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {
+    const wasStarted = this.started;
+    const socketIdentity = this.socketIdentity;
+    this.started = false;
+    this.socketIdentity = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     for (const client of this.clients) {
       client.destroy();
     }
-    await new Promise<void>((resolve, reject) => {
-      this.server.close((error) => {
-        if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
-    await rm(this.options.socketPath, { force: true });
+    if (wasStarted) {
+      await closeServer(this.server);
+    }
+    if (socketIdentity) {
+      await removeSocketIfOwned(this.options.socketPath, socketIdentity);
+    }
   }
 
   private accept(socket: Socket): void {
@@ -82,15 +90,28 @@ export class AttachServer {
     });
     socket.on("data", (chunk: Buffer) => {
       try {
-        for (const message of buffer.push(chunk.toString("utf8"))) {
-          void this.handleMessage(socket, message).catch((error) => {
-            this.send(socket, { type: "error", message: errorMessage(error) });
-          });
-        }
+        this.dispatchMessages(socket, buffer.push(chunk.toString("utf8")));
       } catch (error) {
         this.send(socket, { type: "error", message: errorMessage(error) });
+        this.drainPreservedMessages(socket, buffer);
       }
     });
+  }
+
+  private drainPreservedMessages(socket: Socket, buffer: JsonLineBuffer<AttachClientMessage>): void {
+    try {
+      this.dispatchMessages(socket, buffer.push(""));
+    } catch (error) {
+      this.send(socket, { type: "error", message: errorMessage(error) });
+    }
+  }
+
+  private dispatchMessages(socket: Socket, messages: AttachClientMessage[]): void {
+    for (const message of messages) {
+      void this.handleMessage(socket, message).catch((error) => {
+        this.send(socket, { type: "error", message: errorMessage(error) });
+      });
+    }
   }
 
   private async handleMessage(socket: Socket, message: AttachClientMessage): Promise<void> {
@@ -109,13 +130,15 @@ export class AttachServer {
 
   private async handlePrompt(message: Extract<AttachClientMessage, { type: "prompt" }>): Promise<void> {
     const project = message.project ?? this.options.projectManager.activeProjectAlias;
-    await this.options.sendWechatText(`[${project}] 桌面输入:\n${message.text}`);
     await this.options.projectManager.runPrompt({
       ...(message.project ? { projectAlias: message.project } : {}),
       prompt: message.text,
       toUserId: this.options.boundUserId,
       contextToken: "",
       source: "attach",
+    });
+    void this.options.sendWechatText(`[${project}] 桌面输入:\n${message.text}`).catch((error) => {
+      logger.warn("Failed to mirror attach prompt to WeChat", { error: errorMessage(error), project });
     });
   }
 
@@ -125,7 +148,7 @@ export class AttachServer {
         this.send(socket, await this.readyEvent());
         return;
       case "project":
-        this.send(socket, await this.readyEvent(message.value));
+        this.send(socket, await this.readyEvent());
         return;
       case "interrupt":
         await this.options.projectManager.interrupt(message.project);
@@ -148,10 +171,10 @@ export class AttachServer {
     }
   }
 
-  private async readyEvent(activeProject = this.options.projectManager.activeProjectAlias): Promise<AttachServerEvent> {
+  private async readyEvent(): Promise<AttachServerEvent> {
     return {
       type: "ready",
-      activeProject,
+      activeProject: this.options.projectManager.activeProjectAlias,
       projects: await this.options.projectManager.listProjects(),
     };
   }
@@ -170,4 +193,86 @@ export class AttachServer {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function removeStaleSocket(socketPath: string): Promise<void> {
+  if (!(await pathExists(socketPath))) return;
+  if (await canConnectToSocket(socketPath)) {
+    throw new Error(`Attach socket is already in use: ${socketPath}`);
+  }
+  await rm(socketPath, { force: true });
+}
+
+async function canConnectToSocket(socketPath: string): Promise<boolean> {
+  return await new Promise((resolve) => {
+    const socket = connect(socketPath);
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (connected: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      socket.destroy();
+      resolve(connected);
+    };
+    timer = setTimeout(() => finish(false), 1000);
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+  });
+}
+
+async function listen(server: Server, socketPath: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(socketPath);
+  });
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function readSocketIdentity(socketPath: string): Promise<SocketIdentity> {
+  const stat = await lstat(socketPath);
+  return { dev: stat.dev, ino: stat.ino };
+}
+
+async function removeSocketIfOwned(socketPath: string, identity: SocketIdentity): Promise<void> {
+  let current: SocketIdentity;
+  try {
+    current = await readSocketIdentity(socketPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if (current.dev === identity.dev && current.ino === identity.ino) {
+    await rm(socketPath, { force: true });
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }

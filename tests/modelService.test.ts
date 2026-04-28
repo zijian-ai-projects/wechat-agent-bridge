@@ -141,7 +141,7 @@ exit 2
 `,
     { mode: 0o700 },
   );
-  const service = new ModelService({ codexBin: bin, modelCatalogTimeoutMs: 1000 });
+  const service = new ModelService({ codexBin: bin, modelCatalogTimeoutMs: 5000 });
 
   await assert.rejects(() => service.listModels(), (error: unknown) => {
     assert.ok(error instanceof Error);

@@ -1,6 +1,6 @@
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { connect, type Socket } from "node:net";
+import { createServer, connect, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,18 +12,35 @@ import { AttachServer } from "../src/ipc/AttachServer.js";
 import { JsonLineBuffer, serializeAttachMessage, type AttachServerEvent } from "../src/ipc/protocol.js";
 import type { ProjectSession } from "../src/session/types.js";
 
+interface ClientReadWaiter {
+  reject: (error: Error) => void;
+  resolve: (event: AttachServerEvent) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface ClientReadState {
+  buffer: JsonLineBuffer<AttachServerEvent>;
+  closedError?: Error;
+  events: AttachServerEvent[];
+  waiters: ClientReadWaiter[];
+}
+
+const clientReadStates = new WeakMap<Socket, ClientReadState>();
+
 class FakeProjectManager {
   activeProjectAlias = "bridge";
   prompts: Array<{ projectAlias?: string; prompt: string; toUserId: string; contextToken: string; source?: string }> = [];
   interrupts: Array<string | undefined> = [];
   replacements: Array<{ projectAlias?: string; prompt: string; toUserId: string; contextToken: string; source?: string }> = [];
   models: Array<{ alias?: string; model?: string }> = [];
+  failRunPrompt = false;
 
   async listProjects(): Promise<Array<{ alias: string; cwd: string; ready: boolean; active: boolean }>> {
     return [{ alias: "bridge", cwd: "/tmp/bridge", ready: true, active: true }];
   }
 
   async runPrompt(options: { projectAlias?: string; prompt: string; toUserId: string; contextToken: string; source?: string }): Promise<void> {
+    if (this.failRunPrompt) throw new Error("busy");
     this.prompts.push(options);
   }
 
@@ -62,6 +79,21 @@ function makeSocketPath(): string {
 function connectClient(socketPath: string): Promise<{ socket: Socket; buffer: JsonLineBuffer<AttachServerEvent> }> {
   const socket = connect(socketPath);
   const buffer = new JsonLineBuffer<AttachServerEvent>();
+  const state: ClientReadState = { buffer, events: [], waiters: [] };
+  clientReadStates.set(socket, state);
+  socket.on("data", (chunk: Buffer) => {
+    try {
+      enqueueClientEvents(state, buffer.push(chunk.toString("utf8")));
+    } catch (error) {
+      failClientReads(state, error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+  socket.on("close", () => {
+    failClientReads(state, new Error("Attach client socket closed before an event was received"));
+  });
+  socket.on("error", (error) => {
+    failClientReads(state, error);
+  });
   return new Promise((resolve, reject) => {
     socket.once("connect", () => resolve({ socket, buffer }));
     socket.once("error", reject);
@@ -69,31 +101,54 @@ function connectClient(socketPath: string): Promise<{ socket: Socket; buffer: Js
 }
 
 async function readNext(socket: Socket, buffer: JsonLineBuffer<AttachServerEvent>): Promise<AttachServerEvent> {
+  const state = clientReadStates.get(socket);
+  if (!state || state.buffer !== buffer) throw new Error("Unknown attach test client");
+  const queuedEvent = state.events.shift();
+  if (queuedEvent) return queuedEvent;
+  if (state.closedError) throw state.closedError;
   return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      socket.off("data", onData);
-      socket.off("error", reject);
-      reject(new Error("Timed out waiting for attach server event"));
-    }, 1000);
-    const onData = (chunk: Buffer) => {
-      try {
-        const events = buffer.push(chunk.toString("utf8"));
-        if (events.length > 0) {
-          clearTimeout(timer);
-          socket.off("data", onData);
-          socket.off("error", reject);
-          resolve(events[0]);
-        }
-      } catch (error) {
-        clearTimeout(timer);
-        socket.off("data", onData);
-        socket.off("error", reject);
-        reject(error);
-      }
+    const waiter: ClientReadWaiter = {
+      reject,
+      resolve,
+      timer: setTimeout(() => {
+        state.waiters = state.waiters.filter((pending) => pending !== waiter);
+        reject(new Error("Timed out waiting for attach server event"));
+      }, 5000),
     };
-    socket.on("data", onData);
-    socket.once("error", reject);
+    state.waiters.push(waiter);
   });
+}
+
+async function readUntil(
+  socket: Socket,
+  buffer: JsonLineBuffer<AttachServerEvent>,
+  predicate: (event: AttachServerEvent) => boolean,
+): Promise<AttachServerEvent> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const event = await readNext(socket, buffer);
+    if (predicate(event)) return event;
+  }
+  assert.fail("Timed out waiting for matching attach server event");
+}
+
+function enqueueClientEvents(state: ClientReadState, events: AttachServerEvent[]): void {
+  for (const event of events) {
+    const waiter = state.waiters.shift();
+    if (waiter) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(event);
+      continue;
+    }
+    state.events.push(event);
+  }
+}
+
+function failClientReads(state: ClientReadState, error: Error): void {
+  state.closedError = error;
+  for (const waiter of state.waiters.splice(0)) {
+    clearTimeout(waiter.timer);
+    waiter.reject(error);
+  }
 }
 
 async function withServer(
@@ -153,6 +208,21 @@ test("AttachServer sends ready on hello and dispatches prompts", async () => {
   });
 });
 
+test("AttachServer mirrors prompts only after runtime accepts them", async () => {
+  await withServer(async ({ socketPath, manager, wechatMessages }) => {
+    manager.failRunPrompt = true;
+    const { socket, buffer } = await connectClient(socketPath);
+
+    socket.write(serializeAttachMessage({ type: "prompt", project: "bridge", text: "busy prompt" }));
+    const event = await readNext(socket, buffer);
+    socket.end();
+
+    assert.equal(event.type, "error");
+    assert.match(event.message, /busy/);
+    assert.equal(wechatMessages.length, 0);
+  });
+});
+
 test("AttachServer broadcasts bridge events and handles commands", async () => {
   await withServer(async ({ socketPath, eventBus, manager }) => {
     const { socket, buffer } = await connectClient(socketPath);
@@ -169,7 +239,7 @@ test("AttachServer broadcasts bridge events and handles commands", async () => {
     socket.write(serializeAttachMessage({ type: "command", project: "bridge", name: "model", value: "gpt-5.5" }));
     socket.write(serializeAttachMessage({ type: "command", project: "bridge", name: "models" }));
     await waitFor(() => manager.interrupts.length === 1 && manager.replacements.length === 1 && manager.models.length === 1);
-    const models = await readNext(socket, buffer);
+    const models = await readUntil(socket, buffer, (event) => event.type === "models");
     socket.end();
 
     assert.deepEqual(manager.interrupts, ["bridge"]);
@@ -178,6 +248,32 @@ test("AttachServer broadcasts bridge events and handles commands", async () => {
     assert.deepEqual(manager.models, [{ alias: "bridge", model: "gpt-5.5" }]);
     assert.equal(models.type, "models");
     assert.equal(models.models[0]?.slug, "gpt-5.5");
+  });
+});
+
+test("AttachServer returns truthful project status and broadcasts to multiple clients", async () => {
+  await withServer(async ({ socketPath, eventBus }) => {
+    const first = await connectClient(socketPath);
+    const second = await connectClient(socketPath);
+    first.socket.write(serializeAttachMessage({ type: "hello", client: "attach-cli" }));
+    second.socket.write(serializeAttachMessage({ type: "hello", client: "attach-cli" }));
+    await readNext(first.socket, first.buffer);
+    await readNext(second.socket, second.buffer);
+
+    first.socket.write(serializeAttachMessage({ type: "command", name: "project", value: "missing" }));
+    const ready = await readNext(first.socket, first.buffer);
+    assert.equal(ready.type, "ready");
+    assert.equal(ready.activeProject, "bridge");
+    assert.equal(ready.projects[0]?.active, true);
+
+    await eventBus.publish({ type: "codex_event", project: "bridge", text: "fanout", timestamp: "2026-04-27T00:00:00.000Z" });
+    const firstEvent = await readNext(first.socket, first.buffer);
+    const secondEvent = await readNext(second.socket, second.buffer);
+    first.socket.end();
+    second.socket.end();
+
+    assert.equal(firstEvent.type, "codex_event");
+    assert.equal(secondEvent.type, "codex_event");
   });
 });
 
@@ -193,6 +289,96 @@ test("AttachServer reports invalid client JSON as an error event", async () => {
     assert.match(event.message, /Invalid JSONL message/);
   });
 });
+
+test("AttachServer drains valid JSON preserved after an invalid line", async () => {
+  await withServer(async ({ socketPath }) => {
+    const { socket, buffer } = await connectClient(socketPath);
+
+    socket.write(`{bad}\n${serializeAttachMessage({ type: "hello", client: "attach-cli" })}`);
+    const error = await readNext(socket, buffer);
+    const ready = await readNext(socket, buffer);
+    socket.end();
+
+    assert.equal(error.type, "error");
+    assert.equal(ready.type, "ready");
+  });
+});
+
+test("AttachServer does not interrupt work when a client disconnects", async () => {
+  await withServer(async ({ socketPath, manager }) => {
+    const { socket } = await connectClient(socketPath);
+
+    socket.end();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(manager.interrupts, []);
+  });
+});
+
+test("AttachServer refuses to unlink a live socket owned by another server", async () => {
+  const socketPath = makeSocketPath();
+  const liveServer = await listen(socketPath);
+  const attachServer = new AttachServer({
+    socketPath,
+    eventBus: new EventBus(),
+    projectManager: new FakeProjectManager(),
+    boundUserId: "user-1",
+    sendWechatText: async () => undefined,
+    modelService: { listModels: async () => ({ models: [] }) },
+  });
+  let started = false;
+
+  try {
+    await assert.rejects(
+      async () => {
+        await attachServer.start();
+        started = true;
+      },
+      /Attach socket is already in use/,
+    );
+  } finally {
+    if (started) await attachServer.stop();
+    await closeServer(liveServer);
+    await rm(socketPath.split("/bridge.sock")[0], { recursive: true, force: true });
+  }
+});
+
+test("AttachServer stop before start is safe and does not remove unrelated sockets", async () => {
+  const socketPath = makeSocketPath();
+  const liveServer = await listen(socketPath);
+  const attachServer = new AttachServer({
+    socketPath,
+    eventBus: new EventBus(),
+    projectManager: new FakeProjectManager(),
+    boundUserId: "user-1",
+    sendWechatText: async () => undefined,
+    modelService: { listModels: async () => ({ models: [] }) },
+  });
+
+  await attachServer.stop();
+  assert.equal(existsSync(socketPath), true);
+
+  await closeServer(liveServer);
+  await rm(socketPath.split("/bridge.sock")[0], { recursive: true, force: true });
+});
+
+async function listen(socketPath: string): Promise<Server> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+  return server;
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
 
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
