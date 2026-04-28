@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { APP_NAME, getDataDir } from "../src/config/paths.js";
+import { APP_NAME, getAttachSocketPath, getDataDir } from "../src/config/paths.js";
 
 const PROJECT_NAME = "wechat-agent-bridge";
 const OLD_PROJECT_NAME = "wechat-codex-bridge";
@@ -42,6 +42,16 @@ test("config paths use the new app name while accepting the legacy home env var"
     if (oldCodexHome === undefined) delete process.env.WECHAT_CODEX_BRIDGE_HOME;
     else process.env.WECHAT_CODEX_BRIDGE_HOME = oldCodexHome;
   }
+});
+
+test("attach socket uses a Windows named pipe instead of a filesystem socket on Windows", () => {
+  const socketPath = getAttachSocketPath({
+    platform: "win32",
+    dataDir: "C:\\Users\\zijian\\.wechat-agent-bridge",
+  });
+
+  assert.match(socketPath, /^\\\\\.\\pipe\\wechat-agent-bridge-[a-f0-9]{16}$/);
+  assert.doesNotMatch(socketPath, /bridge\.sock$/);
 });
 
 test("integration manifests use the agent bridge namespace", () => {

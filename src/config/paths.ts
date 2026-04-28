@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -31,8 +32,14 @@ export function getPidPath(): string {
   return join(getDataDir(), `${APP_NAME}.pid`);
 }
 
-export function getAttachSocketPath(): string {
-  return join(getDataDir(), "bridge.sock");
+export function getAttachSocketPath(options: { platform?: NodeJS.Platform; dataDir?: string } = {}): string {
+  const platform = options.platform ?? process.platform;
+  const dataDir = options.dataDir ?? getDataDir();
+  if (platform === "win32") {
+    const hash = createHash("sha256").update(dataDir).digest("hex").slice(0, 16);
+    return `\\\\.\\pipe\\${APP_NAME}-${hash}`;
+  }
+  return join(dataDir, "bridge.sock");
 }
 
 export function getDaemonLogPath(): string {

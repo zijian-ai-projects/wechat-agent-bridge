@@ -53,16 +53,21 @@ export class AttachServer {
 
   async start(): Promise<void> {
     if (this.started) return;
-    const socketDir = dirname(this.options.socketPath);
-    await mkdir(socketDir, { recursive: true, mode: 0o700 });
-    await chmod(socketDir, 0o700);
-    await removeStaleSocket(this.options.socketPath);
+    const isNamedPipe = isWindowsNamedPipePath(this.options.socketPath);
+    if (!isNamedPipe) {
+      const socketDir = dirname(this.options.socketPath);
+      await mkdir(socketDir, { recursive: true, mode: 0o700 });
+      await chmod(socketDir, 0o700);
+      await removeStaleSocket(this.options.socketPath);
+    }
     this.unsubscribe = this.options.eventBus.subscribe((event) => this.broadcast(event));
     try {
       await listen(this.server, this.options.socketPath);
-      await chmod(this.options.socketPath, 0o600);
+      if (!isNamedPipe) {
+        await chmod(this.options.socketPath, 0o600);
+      }
       this.started = true;
-      this.socketIdentity = await readSocketIdentity(this.options.socketPath);
+      this.socketIdentity = isNamedPipe ? undefined : await readSocketIdentity(this.options.socketPath);
     } catch (error) {
       this.started = false;
       this.socketIdentity = undefined;
@@ -301,6 +306,11 @@ export class AttachServer {
     }
     socket.write(payload);
   }
+}
+
+export function isWindowsNamedPipePath(socketPath: string): boolean {
+  const normalized = socketPath.replaceAll("/", "\\").toLowerCase();
+  return normalized.startsWith("\\\\.\\pipe\\") || normalized.startsWith("\\\\?\\pipe\\");
 }
 
 function errorMessage(error: unknown): string {

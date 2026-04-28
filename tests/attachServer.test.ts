@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 
 import type { AgentMode } from "../src/backend/AgentBackend.js";
 import { EventBus } from "../src/core/EventBus.js";
-import { AttachServer, type AttachServerOptions } from "../src/ipc/AttachServer.js";
+import { AttachServer, isWindowsNamedPipePath, type AttachServerOptions } from "../src/ipc/AttachServer.js";
 import { JsonLineBuffer, serializeAttachMessage, type AttachServerEvent } from "../src/ipc/protocol.js";
 import type { ProjectSession } from "../src/session/types.js";
 
@@ -615,6 +615,13 @@ test("AttachServer restricts attach directory and socket permissions", async () 
     await attachServer.stop();
     await rm(socketDir, { recursive: true, force: true });
   }
+});
+
+test("AttachServer identifies Windows named pipe attach endpoints", () => {
+  assert.equal(isWindowsNamedPipePath("\\\\.\\pipe\\wechat-agent-bridge-abcd1234"), true);
+  assert.equal(isWindowsNamedPipePath("\\\\?\\pipe\\wechat-agent-bridge-abcd1234"), true);
+  assert.equal(isWindowsNamedPipePath("C:\\Users\\zijian\\.wechat-agent-bridge\\bridge.sock"), false);
+  assert.equal(isWindowsNamedPipePath("/tmp/wechat-agent-bridge.sock"), false);
 });
 
 test("AttachServer disconnects clients whose accumulated socket buffer exceeds the output limit", () => {
